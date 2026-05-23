@@ -1,0 +1,28 @@
+[package]
+name = "hopkins-kiosk"
+version = "0.1.0"
+description = "Hopkins Plaster Studio kiosk inventory and staff app"
+authors = ["Hopkins Plaster Studio"]
+edition = "2021"
+
+[lib]
+name = "hopkins_kiosk_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "hopkins-kiosk"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.1", features = [] }
+
+[dependencies]
+anyhow = "1.0.102"
+chrono = { version = "0.4.44", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+sqlx = { version = "0.7.4", default-features = false, features = ["runtime-tokio", "sqlite", "chrono"] }
+tauri = { version = "2.11.1", features = [] }
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }

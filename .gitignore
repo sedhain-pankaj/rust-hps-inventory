@@ -1,0 +1,20 @@
+# Rust/Tauri build output
+target/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local SQLite runtime database
+hps.db
+hps.db-shm
+hps.db-wal
+
+# Runtime data and biometric templates
+data/*
+!data/.gitkeep
+fingerprints/
+
+# Python helper caches
+__pycache__/
+
+# OS/editor noise
+.DS_Store

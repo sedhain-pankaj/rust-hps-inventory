@@ -1,0 +1,38 @@
+{
+  "productName": "Hopkins Kiosk",
+  "version": "0.1.0",
+  "identifier": "com.hopkinsplaster.kiosk",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hopkins Plaster Studio",
+        "width": 1280,
+        "height": 800,
+        "fullscreen": false,
+        "decorations": true,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "devtools": true,
+        "zoomHotkeysEnabled": false,
+        "backgroundColor": "#171717"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": []
+  }
+}
