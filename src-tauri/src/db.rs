@@ -4,7 +4,12 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use chrono::{Datelike, Local, NaiveDate};
+use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
@@ -16,8 +21,8 @@ use crate::models::*;
 
 const CORNICE_RATE_CSV: &str = include_str!("../../assets/cornice_rate.csv");
 const OVERALL_STOCK_CSV: &str = include_str!("../../assets/overall_stock.csv");
-const LEGACY_ADMIN_HASH: &str =
-    "74327943f791e17b6081b590be47d518d885b79972d37087df480448e0672094";
+const HPS_LOGO: &[u8] = include_bytes!("../../assets/HPS.png");
+const LEGACY_ADMIN_HASH: &str = "74327943f791e17b6081b590be47d518d885b79972d37087df480448e0672094";
 
 #[derive(Debug, Clone)]
 pub struct AppPaths {
@@ -74,6 +79,7 @@ impl AppState {
         };
 
         migrate(&db).await?;
+        seed_assets(&db).await?;
         seed_if_needed(&db, &paths).await?;
 
         Ok(Self { db, paths })
@@ -281,14 +287,73 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
     .execute(db)
     .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS app_assets (
+            key TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            media_type TEXT NOT NULL,
+            content BLOB NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+async fn seed_assets(db: &SqlitePool) -> Result<()> {
+    let now = now_string();
+    for (key, name, media_type, content) in [
+        (
+            "hps_logo",
+            "Hopkins Plaster Studio logo",
+            "image/png",
+            HPS_LOGO.to_vec(),
+        ),
+        (
+            "cornice_rate_csv",
+            "Seed cornice rates CSV",
+            "text/csv",
+            CORNICE_RATE_CSV.as_bytes().to_vec(),
+        ),
+        (
+            "overall_stock_csv",
+            "Seed overall stock CSV",
+            "text/csv",
+            OVERALL_STOCK_CSV.as_bytes().to_vec(),
+        ),
+    ] {
+        sqlx::query(
+            r#"
+            INSERT INTO app_assets (key, name, media_type, content, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                name = excluded.name,
+                media_type = excluded.media_type,
+                content = excluded.content,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(key)
+        .bind(name)
+        .bind(media_type)
+        .bind(content)
+        .bind(&now)
+        .execute(db)
+        .await?;
+    }
     Ok(())
 }
 
 async fn seed_if_needed(db: &SqlitePool, paths: &AppPaths) -> Result<()> {
-    let seeded: Option<String> = sqlx::query("SELECT value FROM app_meta WHERE key = 'seed_version'")
-        .fetch_optional(db)
-        .await?
-        .map(|row| row.get("value"));
+    let seeded: Option<String> =
+        sqlx::query("SELECT value FROM app_meta WHERE key = 'seed_version'")
+            .fetch_optional(db)
+            .await?
+            .map(|row| row.get("value"));
 
     if seeded.is_some() {
         return Ok(());
@@ -557,7 +622,11 @@ async fn import_legacy_fingerprints_if_present(db: &SqlitePool, paths: &AppPaths
     Ok(())
 }
 
-pub async fn set_permissions(db: &SqlitePool, employee_id: &str, permissions: &[&str]) -> Result<()> {
+pub async fn set_permissions(
+    db: &SqlitePool,
+    employee_id: &str,
+    permissions: &[&str],
+) -> Result<()> {
     sqlx::query("DELETE FROM employee_permissions WHERE employee_id = ?")
         .bind(employee_id)
         .execute(db)
@@ -574,7 +643,10 @@ pub async fn set_permissions(db: &SqlitePool, employee_id: &str, permissions: &[
     Ok(())
 }
 
-pub async fn permissions_for(db: &SqlitePool, employee_id: &str) -> Result<Vec<String>, sqlx::Error> {
+pub async fn permissions_for(
+    db: &SqlitePool,
+    employee_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT permission FROM employee_permissions WHERE employee_id = ? ORDER BY permission",
     )
@@ -585,7 +657,10 @@ pub async fn permissions_for(db: &SqlitePool, employee_id: &str) -> Result<Vec<S
     Ok(rows.into_iter().map(|row| row.get("permission")).collect())
 }
 
-pub async fn employee_by_id(db: &SqlitePool, employee_id: &str) -> Result<Option<Employee>, sqlx::Error> {
+pub async fn employee_by_id(
+    db: &SqlitePool,
+    employee_id: &str,
+) -> Result<Option<Employee>, sqlx::Error> {
     let row = sqlx::query(
         r#"
         SELECT e.*,
@@ -604,7 +679,10 @@ pub async fn employee_by_id(db: &SqlitePool, employee_id: &str) -> Result<Option
     }
 }
 
-pub async fn list_employees(db: &SqlitePool, include_inactive: bool) -> Result<Vec<Employee>, sqlx::Error> {
+pub async fn list_employees(
+    db: &SqlitePool,
+    include_inactive: bool,
+) -> Result<Vec<Employee>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
         SELECT e.*,
@@ -625,7 +703,10 @@ pub async fn list_employees(db: &SqlitePool, include_inactive: bool) -> Result<V
     Ok(employees)
 }
 
-async fn employee_from_row(db: &SqlitePool, row: sqlx::sqlite::SqliteRow) -> Result<Employee, sqlx::Error> {
+async fn employee_from_row(
+    db: &SqlitePool,
+    row: sqlx::sqlite::SqliteRow,
+) -> Result<Employee, sqlx::Error> {
     let id: String = row.get("id");
     Ok(Employee {
         permissions: permissions_for(db, &id).await?,
@@ -687,6 +768,30 @@ pub fn week_start_for(date: NaiveDate) -> NaiveDate {
 }
 
 pub fn hash_password(password: &str) -> String {
+    let salt = SaltString::generate(&mut OsRng);
+    if let Ok(hash) = Argon2::default().hash_password(password.as_bytes(), &salt) {
+        return hash.to_string();
+    }
+    legacy_sha256(password)
+}
+
+pub fn verify_password(stored_hash: &str, password: &str) -> bool {
+    if stored_hash.starts_with("$argon2") {
+        let Ok(parsed) = PasswordHash::new(stored_hash) else {
+            return false;
+        };
+        return Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok();
+    }
+    stored_hash == legacy_sha256(password)
+}
+
+pub fn is_legacy_password_hash(stored_hash: &str) -> bool {
+    !stored_hash.starts_with("$argon2")
+}
+
+fn legacy_sha256(password: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
     to_hex(&hasher.finalize())

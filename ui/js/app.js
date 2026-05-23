@@ -2,6 +2,7 @@ import {
   escapeHtml,
   formatAction,
   invoke,
+  listen,
   setBusy,
   todayIso,
   weekStartIso,
@@ -12,10 +13,14 @@ const app = document.getElementById("app");
 
 const state = {
   status: null,
+  logoDataUrl: "",
   staff: [],
   admin: null,
   currentStaff: null,
   adminView: "alerts",
+  adminDbTable: "employees",
+  selectedDbRow: null,
+  enrollmentLog: [],
   staffView: "clock",
   selectedEmployee: null,
   selectedStock: null,
@@ -36,6 +41,7 @@ const permissionLabels = {
 async function loadStatus() {
   try {
     state.status = await invoke("app_status");
+    state.logoDataUrl = await invoke("get_asset_data_url", { key: "hps_logo" });
   } catch (error) {
     state.status = {
       fingerprint_helper_found: false,
@@ -169,10 +175,12 @@ function renderAdmin() {
   const tabs = [
     ["alerts", "Alerts"],
     ["employees", "Employees"],
+    ["enroll", "Enroll"],
     ["stock", "Stock"],
     ["rates", "Cornice Rates"],
     ["time", "Time Clock"],
     ["logs", "Daily Logs"],
+    ["database", "Database"],
   ];
   app.innerHTML = workspaceShell(
     "Admin",
@@ -193,10 +201,12 @@ function renderAdmin() {
 async function renderAdminPanel() {
   if (state.adminView === "alerts") return renderAlertsPanel();
   if (state.adminView === "employees") return renderEmployeesPanel();
+  if (state.adminView === "enroll") return renderEnrollPanel();
   if (state.adminView === "stock") return renderStockPanel();
   if (state.adminView === "rates") return renderRatesPanel();
   if (state.adminView === "time") return renderTimePanel();
-  return renderLogsPanel();
+  if (state.adminView === "logs") return renderLogsPanel();
+  return renderDatabasePanel();
 }
 
 async function renderAlertsPanel() {
@@ -241,7 +251,7 @@ async function renderEmployeesPanel() {
         <label>Employee ID<input name="id" value="${escapeHtml(selected.id)}" /></label>
         <label>Name<input name="name" value="${escapeHtml(selected.name)}" /></label>
         <label>Finger<input name="finger" value="${escapeHtml(selected.finger)}" /></label>
-        <label>Password<input name="password" type="password" placeholder="Leave blank to keep" /></label>
+        <label>Password<input name="password" type="password" placeholder="Leave blank to keep current password" /></label>
         <label class="check"><input type="checkbox" name="active" ${selected.active ? "checked" : ""} /> Active</label>
         <label class="check"><input type="checkbox" name="is_admin" ${selected.is_admin ? "checked" : ""} /> Admin</label>
         <div class="wide checkbox-row">
@@ -263,7 +273,7 @@ async function renderEmployeesPanel() {
         </div>
       </form>
       ${table(
-        ["Name", "ID", "Admin", "Fingerprint", "Active"],
+        ["Name", "ID", "Admin", "Password", "Fingerprint", "Active"],
         employees.map((employee) => ({
           clickable: true,
           attrs: `data-select-employee="${escapeHtml(employee.id)}"`,
@@ -271,6 +281,7 @@ async function renderEmployeesPanel() {
             employee.name,
             employee.id,
             employee.is_admin ? "Yes" : "No",
+            employee.has_password ? "Set" : "No",
             employee.has_fingerprint ? "Enrolled" : "No",
             employee.active ? "Yes" : "No",
           ],
@@ -310,15 +321,101 @@ async function renderEmployeesPanel() {
     setBusy(event.currentTarget);
     try {
       const form = new FormData(app.querySelector("[data-employee-form]"));
-      state.selectedEmployee = await invoke("enroll_fingerprint", {
+      const response = await invoke("enroll_fingerprint", {
         employeeId: form.get("id"),
         finger: form.get("finger") || "right-index",
       });
+      state.selectedEmployee = response.employee;
+      state.enrollmentLog = response.messages || [];
       renderEmployeesPanel();
     } catch (error) {
       alert(String(error));
     } finally {
       setBusy(event.currentTarget, false);
+    }
+  });
+}
+
+async function renderEnrollPanel() {
+  const employees = await invoke("list_staff", { includeInactive: true });
+  const selected = state.selectedEmployee || employees[0] || emptyEmployee();
+  const log = state.enrollmentLog || [];
+  setPanel(
+    "Fingerprint Enrollment",
+    `<button class="ghost" data-refresh>Refresh</button>`,
+    `
+      <form class="form-grid" data-enroll-form>
+        <label class="wide">Employee
+          <select name="employee_id">
+            ${employees
+              .map(
+                (employee) => `
+                  <option value="${escapeHtml(employee.id)}" ${employee.id === selected.id ? "selected" : ""}>
+                    ${escapeHtml(employee.name)} (${escapeHtml(employee.id)})
+                  </option>
+                `,
+              )
+              .join("")}
+          </select>
+        </label>
+        <label>Finger
+          <select name="finger">
+            ${fingerOptions(selected.finger)}
+          </select>
+        </label>
+        <div class="panel-actions">
+          <button class="warning" type="submit">Enroll / Replace Fingerprint</button>
+        </div>
+      </form>
+      <div class="message">The template is saved to SQLite as a BLOB. Temporary helper files are cleared after enrollment and scans.</div>
+      <div class="log-box" data-enrollment-log>
+        ${
+          log.length
+            ? log.map((line) => `<div>${escapeHtml(formatFingerprintLine(line))}</div>`).join("")
+            : `<div>Ready to enroll.</div>`
+        }
+      </div>
+      ${table(
+        ["Name", "ID", "Admin", "Password", "Fingerprint"],
+        employees.map((employee) => ({
+          review: !employee.has_password || !employee.has_fingerprint,
+          cells: [
+            employee.name,
+            employee.id,
+            employee.is_admin ? "Yes" : "No",
+            employee.has_password ? "Set" : "No",
+            employee.has_fingerprint ? "Enrolled" : "No",
+          ],
+        })),
+      )}
+    `,
+  );
+  app.querySelector("[data-refresh]").addEventListener("click", renderEnrollPanel);
+  app.querySelector("[data-enroll-form]").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button[type='submit']");
+    const form = new FormData(event.currentTarget);
+    setBusy(button);
+    state.enrollmentLog = ["Starting enrollment. Follow the reader prompts."];
+    renderEnrollmentLog();
+    const unlisten = await listen("fingerprint_progress", (event) => {
+      state.enrollmentLog.push(event.payload);
+      renderEnrollmentLog();
+    });
+    try {
+      const response = await invoke("enroll_fingerprint", {
+        employeeId: form.get("employee_id"),
+        finger: form.get("finger") || "right-index",
+      });
+      state.selectedEmployee = response.employee;
+      state.enrollmentLog = response.messages || ["Enrollment completed."];
+      renderEnrollPanel();
+    } catch (error) {
+      state.enrollmentLog = [String(error.message || error)];
+      renderEnrollPanel();
+    } finally {
+      await unlisten();
+      setBusy(button, false);
     }
   });
 }
@@ -532,6 +629,103 @@ async function renderLogsPanel() {
     `,
   );
   app.querySelector("[data-refresh]").addEventListener("click", renderLogsPanel);
+}
+
+async function renderDatabasePanel() {
+  const tables = await invoke("list_admin_tables");
+  if (!tables.some((table) => table.name === state.adminDbTable)) {
+    state.adminDbTable = tables[0]?.name || "employees";
+  }
+  const data = await invoke("list_admin_table_rows", { table: state.adminDbTable });
+  const selected =
+    state.selectedDbRow && state.selectedDbRow.table === data.table
+      ? state.selectedDbRow
+      : { table: data.table, rowid: null, values: emptyDbValues(data.columns) };
+  const visibleColumns = data.columns.slice(0, 8);
+  setPanel(
+    "Database Tables",
+    `
+      <select data-db-table>
+        ${tables
+          .map(
+            (table) => `
+              <option value="${escapeHtml(table.name)}" ${table.name === data.table ? "selected" : ""}>
+                ${escapeHtml(table.label)}
+              </option>
+            `,
+          )
+          .join("")}
+      </select>
+      <button class="ghost" data-new-db-row>New Row</button>
+      <button class="ghost" data-refresh>Refresh</button>
+    `,
+    `
+      <form class="form-grid db-form" data-db-form>
+        ${data.columns.map((column) => dbField(column, selected.values[column.name])).join("")}
+        <div class="wide panel-actions">
+          <button class="primary" type="submit">Save Row</button>
+          ${
+            selected.rowid
+              ? `<button class="danger" type="button" data-delete-db-row>Delete Row</button>`
+              : ""
+          }
+        </div>
+      </form>
+      ${table(
+        visibleColumns.map((column) => column.label),
+        data.rows.map((row) => ({
+          clickable: true,
+          attrs: `data-db-row="${row.rowid}"`,
+          review: row.values.needs_admin_review === true || row.values.resolved === false,
+          cells: visibleColumns.map((column) => dbDisplay(row.values[column.name])),
+        })),
+      )}
+    `,
+  );
+
+  app.querySelector("[data-db-table]").addEventListener("change", (event) => {
+    state.adminDbTable = event.currentTarget.value;
+    state.selectedDbRow = null;
+    renderDatabasePanel();
+  });
+  app.querySelector("[data-new-db-row]").addEventListener("click", () => {
+    state.selectedDbRow = { table: data.table, rowid: null, values: emptyDbValues(data.columns) };
+    renderDatabasePanel();
+  });
+  app.querySelector("[data-refresh]").addEventListener("click", () => {
+    state.selectedDbRow = null;
+    renderDatabasePanel();
+  });
+  app.querySelectorAll("[data-db-row]").forEach((rowElement) => {
+    rowElement.addEventListener("click", () => {
+      const row = data.rows.find((item) => item.rowid === Number(rowElement.dataset.dbRow));
+      state.selectedDbRow = row ? { table: data.table, rowid: row.rowid, values: row.values } : null;
+      renderDatabasePanel();
+    });
+  });
+  app.querySelector("[data-db-form]").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = collectDbValues(data.columns, event.currentTarget);
+    const result = await invoke("save_admin_table_row", {
+      input: {
+        table: data.table,
+        rowid: selected.rowid,
+        values,
+      },
+    });
+    state.selectedDbRow = null;
+    state.adminDbTable = result.table;
+    renderDatabasePanel();
+  });
+  app.querySelector("[data-delete-db-row]")?.addEventListener("click", async () => {
+    if (!selected.rowid) return;
+    await invoke("delete_admin_table_row", {
+      table: data.table,
+      rowid: selected.rowid,
+    });
+    state.selectedDbRow = null;
+    renderDatabasePanel();
+  });
 }
 
 function renderStaffDashboard() {
@@ -824,11 +1018,12 @@ function workspaceShell(title, subtitle, tabs, active) {
 
 function topbar(title, subtitle) {
   const helper = state.status?.fingerprint_helper_found ? "Fingerprint ready" : "Fingerprint helper missing";
+  const logo = state.logoDataUrl || "./assets/HPS.png";
   return `
     <header class="topbar">
       <button class="icon ghost" data-back title="Back">Back</button>
       <div class="brand">
-        <img src="./assets/HPS.png" alt="" />
+        <img src="${logo}" alt="" />
         <div class="title">
           <h1>${escapeHtml(title)}</h1>
           <p>${escapeHtml(subtitle)}</p>
@@ -868,7 +1063,132 @@ function table(headers, rows) {
 }
 
 function cellLooksHtml(value) {
-  return typeof value === "string" && value.trim().startsWith("<");
+  return typeof value === "string" && value.trim().startsWith("<button");
+}
+
+function fingerOptions(selected = "right-index") {
+  return [
+    "right-index",
+    "right-thumb",
+    "right-middle",
+    "right-ring",
+    "right-little",
+    "left-index",
+    "left-thumb",
+    "left-middle",
+    "left-ring",
+    "left-little",
+  ]
+    .map(
+      (finger) => `
+        <option value="${finger}" ${finger === selected ? "selected" : ""}>
+          ${finger.replace("-", " ")}
+        </option>
+      `,
+    )
+    .join("");
+}
+
+function formatFingerprintLine(line) {
+  if (line.startsWith("PROGRESS|")) {
+    const [, completed, total] = line.split("|");
+    return `Enrollment stage ${completed} of ${total}`;
+  }
+  if (line.startsWith("ENROLL_STAGES|")) {
+    return `Reader requires ${line.split("|")[1]} enrollment stages`;
+  }
+  if (line.startsWith("DEVICE|")) {
+    const [, name, driver, id] = line.split("|");
+    return `Reader: ${name} (${driver}, ${id})`;
+  }
+  if (line.startsWith("READY|")) return `Ready for ${line.split("|")[1]}`;
+  if (line.startsWith("RETRY|")) return `Retry: ${line.split("|")[1]}`;
+  if (line.startsWith("ENROLLED|")) return "Enrollment completed and stored in SQLite";
+  return line;
+}
+
+function renderEnrollmentLog() {
+  const logBox = app.querySelector("[data-enrollment-log]");
+  if (!logBox) return;
+  const log = state.enrollmentLog || [];
+  logBox.innerHTML = log.length
+    ? log.map((line) => `<div>${escapeHtml(formatFingerprintLine(line))}</div>`).join("")
+    : `<div>Ready to enroll.</div>`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function emptyDbValues(columns) {
+  return Object.fromEntries(
+    columns.map((column) => [
+      column.name,
+      column.kind === "bool" ? false : column.kind === "integer" || column.kind === "real" ? null : "",
+    ]),
+  );
+}
+
+function dbField(column, value) {
+  const safeValue = dbInputValue(value);
+  const disabled = !column.editable || column.protected ? "disabled" : "";
+  const protectedClass = column.protected ? " protected" : "";
+  if (column.kind === "bool") {
+    return `
+      <label class="check${protectedClass}">
+        <input type="checkbox" name="${escapeHtml(column.name)}" ${value ? "checked" : ""} ${disabled} />
+        ${escapeHtml(column.label)}
+      </label>
+    `;
+  }
+  if (column.kind === "blob" || column.protected) {
+    return `
+      <label class="${protectedClass}">${escapeHtml(column.label)}
+        <input name="${escapeHtml(column.name)}" value="${escapeHtml(safeValue)}" disabled />
+      </label>
+    `;
+  }
+  if (String(safeValue).length > 80) {
+    return `
+      <label class="wide">${escapeHtml(column.label)}
+        <textarea name="${escapeHtml(column.name)}">${escapeHtml(safeValue)}</textarea>
+      </label>
+    `;
+  }
+  return `
+    <label>${escapeHtml(column.label)}
+      <input name="${escapeHtml(column.name)}" value="${escapeHtml(safeValue)}" />
+    </label>
+  `;
+}
+
+function collectDbValues(columns, form) {
+  const formData = new FormData(form);
+  const values = {};
+  columns.forEach((column) => {
+    if (!column.editable || column.protected) return;
+    if (column.kind === "bool") {
+      values[column.name] = formData.get(column.name) === "on";
+    } else if (column.kind === "integer") {
+      const raw = formData.get(column.name);
+      values[column.name] = raw === "" || raw === null ? null : Number.parseInt(raw, 10);
+    } else if (column.kind === "real") {
+      const raw = formData.get(column.name);
+      values[column.name] = raw === "" || raw === null ? null : Number(raw);
+    } else {
+      values[column.name] = formData.get(column.name) ?? "";
+    }
+  });
+  return values;
+}
+
+function dbInputValue(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "boolean") return value ? "1" : "0";
+  return String(value);
+}
+
+function dbDisplay(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
 }
 
 function emptyEmployee() {

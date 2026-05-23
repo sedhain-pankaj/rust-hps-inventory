@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppStatus {
@@ -34,6 +35,12 @@ pub struct EmployeeInput {
 pub struct AuthResponse {
     pub employee: Employee,
     pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FingerprintEnrollResponse {
+    pub employee: Employee,
+    pub messages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -209,4 +216,40 @@ pub struct Delivery {
     pub address: String,
     pub items: String,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminTableInfo {
+    pub name: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminColumnInfo {
+    pub name: String,
+    pub label: String,
+    pub kind: String,
+    pub editable: bool,
+    pub protected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminTableRow {
+    pub rowid: i64,
+    pub values: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminTableData {
+    pub table: String,
+    pub label: String,
+    pub columns: Vec<AdminColumnInfo>,
+    pub rows: Vec<AdminTableRow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminTableSaveInput {
+    pub table: String,
+    pub rowid: Option<i64>,
+    pub values: Value,
 }

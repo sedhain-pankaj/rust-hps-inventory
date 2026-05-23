@@ -1,7 +1,10 @@
 use std::{
     env, fs,
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    sync::{mpsc, Arc},
+    thread,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -31,7 +34,10 @@ pub fn find_helper_binary(paths: &AppPaths) -> Option<PathBuf> {
 
     let mut candidates = vec![
         paths.data_dir.join("employee-clock-helper"),
-        paths.data_dir.join("libfprint").join("employee-clock-helper"),
+        paths
+            .data_dir
+            .join("libfprint")
+            .join("employee-clock-helper"),
         paths
             .source_root
             .join("libfprint-CS9711")
@@ -58,22 +64,61 @@ pub async fn identify_employee(db: &sqlx::SqlitePool, paths: &AppPaths) -> Resul
     export_templates(db, paths).await?;
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
-    let lines = tokio::task::spawn_blocking(move || {
-        run_helper(&helper, &["identify".to_string(), path_string(&storage)])
-    })
-    .await
-    .context("Fingerprint task failed")??;
 
-    for line in lines {
-        if let Some(employee_id) = line.strip_prefix("MATCH|") {
-            return Ok(employee_id.trim().to_string());
+    let attempts = env::var("HPS_FINGERPRINT_ATTEMPTS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(5);
+    let mut last_error = None;
+
+    for attempt in 1..=attempts {
+        let helper_for_task = helper.clone();
+        let storage_for_task = storage.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            run_helper(
+                &helper_for_task,
+                &["identify".to_string(), path_string(&storage_for_task)],
+            )
+        })
+        .await
+        .context("Fingerprint task failed")?;
+
+        match result {
+            Ok(lines) => {
+                for line in lines {
+                    if let Some(employee_id) = line.strip_prefix("MATCH|") {
+                        clear_template_cache(&storage);
+                        return Ok(employee_id.trim().to_string());
+                    }
+                    if line == "NO_MATCH" {
+                        last_error = Some(
+                            "Fingerprint scanned, but no enrolled employee matched.".to_string(),
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                if is_fatal_identify_error(&message) {
+                    clear_template_cache(&storage);
+                    return Err(anyhow!(message));
+                }
+                last_error = Some(message);
+            }
         }
-        if line == "NO_MATCH" {
-            return Err(anyhow!("Fingerprint scanned, but no enrolled employee matched."));
+
+        if attempt < attempts {
+            std::thread::sleep(std::time::Duration::from_millis(250));
         }
     }
 
-    Err(anyhow!("Fingerprint helper finished without a match result."))
+    clear_template_cache(&storage);
+    Err(anyhow!(
+        "{} after {attempts} scan attempts. Use password fallback or re-enroll the fingerprint.",
+        last_error
+            .unwrap_or_else(|| "Fingerprint helper finished without a match result".to_string())
+    ))
 }
 
 pub async fn enroll_employee(
@@ -81,7 +126,8 @@ pub async fn enroll_employee(
     paths: &AppPaths,
     employee_id: &str,
     finger: &str,
-) -> Result<()> {
+    on_line: Option<Arc<dyn Fn(String) + Send + Sync>>,
+) -> Result<Vec<String>> {
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
     fs::create_dir_all(&storage).context("Could not create fingerprint storage")?;
@@ -93,9 +139,11 @@ pub async fn enroll_employee(
         finger.to_string(),
     ];
     let helper_for_task = helper.clone();
-    tokio::task::spawn_blocking(move || run_helper(&helper_for_task, &args))
-        .await
-        .context("Fingerprint enrollment task failed")??;
+    let lines = tokio::task::spawn_blocking(move || {
+        run_helper_with_events(&helper_for_task, &args, on_line.as_deref())
+    })
+    .await
+    .context("Fingerprint enrollment task failed")??;
 
     let template_path = storage.join(format!("{employee_id}.fpdata"));
     let template = fs::read(&template_path).with_context(|| {
@@ -122,11 +170,14 @@ pub async fn enroll_employee(
     .execute(db)
     .await?;
 
-    Ok(())
+    let _ = fs::remove_file(template_path);
+
+    Ok(lines)
 }
 
 async fn export_templates(db: &sqlx::SqlitePool, paths: &AppPaths) -> Result<()> {
     fs::create_dir_all(&paths.fingerprint_dir).context("Could not create fingerprint storage")?;
+    clear_template_cache(&paths.fingerprint_dir);
     let rows = sqlx::query("SELECT employee_id, template FROM fingerprint_templates")
         .fetch_all(db)
         .await?;
@@ -142,7 +193,36 @@ async fn export_templates(db: &sqlx::SqlitePool, paths: &AppPaths) -> Result<()>
     Ok(())
 }
 
+fn clear_template_cache(storage: &Path) {
+    let Ok(entries) = fs::read_dir(storage) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("fpdata") {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn is_fatal_identify_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("no fingerprint reader")
+        || lower.contains("no compatible enrolled")
+        || lower.contains("helper was not found")
+        || lower.contains("permission")
+        || lower.contains("open")
+}
+
 fn run_helper(helper: &Path, args: &[String]) -> Result<Vec<String>> {
+    run_helper_with_events(helper, args, None)
+}
+
+fn run_helper_with_events(
+    helper: &Path,
+    args: &[String],
+    on_line: Option<&(dyn Fn(String) + Send + Sync)>,
+) -> Result<Vec<String>> {
     let mut command = Command::new(helper);
     command.args(args);
     if let Some(helper_dir) = helper.parent() {
@@ -155,20 +235,36 @@ fn run_helper(helper: &Path, args: &[String]) -> Result<Vec<String>> {
         command.env("LD_LIBRARY_PATH", value);
     }
 
-    let output = command
-        .output()
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
         .with_context(|| format!("Could not run fingerprint helper at {}", helper.display()))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let lines: Vec<String> = stdout
-        .lines()
-        .chain(stderr.lines())
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect();
+    let (tx, rx) = mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        spawn_line_reader(stdout, tx.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_line_reader(stderr, tx.clone());
+    }
+    drop(tx);
 
-    if output.status.success() {
+    let mut lines = Vec::new();
+    for line in rx {
+        if let Some(on_line) = on_line {
+            on_line(line.clone());
+        }
+        lines.push(line);
+    }
+
+    let status = child.wait().with_context(|| {
+        format!(
+            "Could not wait for fingerprint helper at {}",
+            helper.display()
+        )
+    })?;
+
+    if status.success() {
         return Ok(lines);
     }
 
@@ -176,8 +272,22 @@ fn run_helper(helper: &Path, args: &[String]) -> Result<Vec<String>> {
         .iter()
         .find_map(|line| line.strip_prefix("ERROR|").map(str::to_string))
         .or_else(|| lines.last().cloned())
-        .unwrap_or_else(|| format!("Fingerprint helper exited with {}", output.status));
+        .unwrap_or_else(|| format!("Fingerprint helper exited with {status}"));
     Err(anyhow!(message))
+}
+
+fn spawn_line_reader<R>(reader: R, tx: mpsc::Sender<String>)
+where
+    R: std::io::Read + Send + 'static,
+{
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            let trimmed = line.trim().to_string();
+            if !trimmed.is_empty() {
+                let _ = tx.send(trimmed);
+            }
+        }
+    });
 }
 
 fn helper_missing_error() -> anyhow::Error {

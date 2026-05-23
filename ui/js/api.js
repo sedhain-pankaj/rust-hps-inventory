@@ -1,11 +1,17 @@
 const tauriCore = typeof window !== "undefined" && window.__TAURI__ && window.__TAURI__.core;
 const tauriInvoke = tauriCore ? tauriCore.invoke : null;
+const tauriEvent = typeof window !== "undefined" && window.__TAURI__ && window.__TAURI__.event;
 
 export async function invoke(command, args = {}) {
   if (!tauriInvoke) {
     throw new Error("Tauri runtime is not available.");
   }
   return tauriInvoke(command, args);
+}
+
+export async function listen(event, handler) {
+  if (!tauriEvent?.listen) return () => {};
+  return tauriEvent.listen(event, handler);
 }
 
 export function escapeHtml(value) {

@@ -128,3 +128,11 @@ CREATE TABLE IF NOT EXISTS admin_notifications (
     resolved INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS app_assets (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    content BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+);

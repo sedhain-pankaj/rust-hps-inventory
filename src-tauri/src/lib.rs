@@ -14,22 +14,18 @@ pub fn run() {
             let state = tauri::async_runtime::block_on(db::AppState::initialize(&handle))?;
             app.manage(state);
 
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(_window) = app.get_webview_window("main") {
                 // let _ = window.set_fullscreen(true);
                 // let _ = window.set_decorations(false);
                 // let _ = window.set_always_on_top(true);
                 // let _ = window.set_focus();
-                // Open the devtools on startup to aid debugging (only in dev builds).
-                #[cfg(debug_assertions)]
-                {
-                    let _ = window.open_devtools();
-                }
             }
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_status,
+            get_asset_data_url,
             list_staff,
             save_employee,
             authenticate_password,
@@ -45,6 +41,10 @@ pub fn run() {
             attendance_for_week,
             list_admin_alerts,
             resolve_alert,
+            list_admin_tables,
+            list_admin_table_rows,
+            save_admin_table_row,
+            delete_admin_table_row,
             add_cornice_log,
             list_cornice_logs,
             add_production_log,

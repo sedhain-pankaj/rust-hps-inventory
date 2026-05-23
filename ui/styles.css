@@ -388,6 +388,28 @@ label {
   width: auto;
 }
 
+.protected input,
+.protected textarea {
+  opacity: 0.72;
+}
+
+.db-form {
+  margin-bottom: 18px;
+}
+
+.log-box {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 12px 0 18px;
+  padding: 12px;
+  background: #101010;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92rem;
+}
+
 .metric-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
