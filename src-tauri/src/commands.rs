@@ -10,6 +10,7 @@ use crate::{
     db::{
         employee_by_id, format_seconds, hash_password, is_legacy_password_hash, list_employees,
         notification, parse_date_or_today, today_string, verify_password, week_start_for, AppState,
+        FingerprintEnrollJob,
     },
     fingerprint,
     models::*,
@@ -481,9 +482,20 @@ pub async fn enroll_fingerprint(
         .await
         .map_err(to_string)?
         .ok_or_else(|| "Choose a saved employee before enrolling a fingerprint.".to_string())?;
+    let progress_buffer = state.fingerprint_progress.clone();
+    if let Ok(mut lines) = progress_buffer.lock() {
+        lines.clear();
+    }
     let app_for_progress = app.clone();
     let progress = Arc::new(move |line: String| {
-        let _ = app_for_progress.emit("fingerprint_progress", line);
+        if let Ok(mut lines) = progress_buffer.lock() {
+            lines.push(line.clone());
+        }
+        let app_for_emit = app_for_progress.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = app_for_emit.emit("fingerprint_progress", line.clone());
+            let _ = app_for_emit.emit("fingerprint-progress", line);
+        });
     });
     let messages = fingerprint::enroll_employee(
         &state.db,
@@ -500,6 +512,158 @@ pub async fn enroll_fingerprint(
         .map_err(to_string)?
         .ok_or_else(|| "Employee was enrolled but could not be reloaded.".to_string())?;
     Ok(FingerprintEnrollResponse { employee, messages })
+}
+
+#[tauri::command]
+pub async fn start_fingerprint_enroll(
+    state: State<'_, AppState>,
+    employee_id: String,
+    finger: String,
+) -> CommandResult<FingerprintEnrollStartResponse> {
+    let employee = employee_by_id(&state.db, &employee_id)
+        .await
+        .map_err(to_string)?
+        .ok_or_else(|| "Choose a saved employee before enrolling a fingerprint.".to_string())?;
+    let finger = if finger.trim().is_empty() {
+        "right-index".to_string()
+    } else {
+        finger.trim().to_string()
+    };
+    let job_id = state.next_enroll_job_id();
+    {
+        let mut jobs = state
+            .enroll_jobs
+            .lock()
+            .map_err(|_| "Could not create enrollment job.".to_string())?;
+        jobs.insert(
+            job_id.clone(),
+            FingerprintEnrollJob {
+                employee_id: employee.id.clone(),
+                lines: vec!["Starting enrollment. Follow the reader prompts.".to_string()],
+                done: false,
+                error: None,
+            },
+        );
+    }
+
+    let db = state.db.clone();
+    let paths = state.paths.clone();
+    let jobs = state.enroll_jobs.clone();
+    let job_id_for_task = job_id.clone();
+    let employee_id_for_task = employee.id.clone();
+    tauri::async_runtime::spawn(async move {
+        let progress_jobs = jobs.clone();
+        let progress_job_id = job_id_for_task.clone();
+        let progress = Arc::new(move |line: String| {
+            if let Ok(mut all_jobs) = progress_jobs.lock() {
+                if let Some(job) = all_jobs.get_mut(&progress_job_id) {
+                    job.lines.push(line);
+                }
+            }
+        });
+
+        let result = fingerprint::enroll_employee(
+            &db,
+            &paths,
+            &employee_id_for_task,
+            &finger,
+            Some(progress),
+        )
+        .await;
+
+        if let Ok(mut all_jobs) = jobs.lock() {
+            if let Some(job) = all_jobs.get_mut(&job_id_for_task) {
+                match result {
+                    Ok(messages) => {
+                        if !messages.is_empty() {
+                            job.lines = messages;
+                        }
+                        job.done = true;
+                    }
+                    Err(error) => {
+                        job.error = Some(error.to_string());
+                        job.done = true;
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(FingerprintEnrollStartResponse { job_id })
+}
+
+#[tauri::command]
+pub async fn poll_fingerprint_enroll(
+    state: State<'_, AppState>,
+    job_id: String,
+    from_index: Option<usize>,
+) -> CommandResult<FingerprintEnrollStatusResponse> {
+    let start = from_index.unwrap_or(0);
+    let (employee_id, done, error, next_index, lines) = {
+        let jobs = state
+            .enroll_jobs
+            .lock()
+            .map_err(|_| "Could not read enrollment job.".to_string())?;
+        let job = jobs
+            .get(&job_id)
+            .ok_or_else(|| "Enrollment job was not found.".to_string())?;
+        let next_index = job.lines.len();
+        let lines = if start < next_index {
+            job.lines[start..].to_vec()
+        } else {
+            Vec::new()
+        };
+        (
+            job.employee_id.clone(),
+            job.done,
+            job.error.clone(),
+            next_index,
+            lines,
+        )
+    };
+
+    let employee = if done && error.is_none() {
+        employee_by_id(&state.db, &employee_id)
+            .await
+            .map_err(to_string)?
+    } else {
+        None
+    };
+    let state_name = if !done {
+        "running"
+    } else if error.is_some() {
+        "failed"
+    } else {
+        "done"
+    };
+    Ok(FingerprintEnrollStatusResponse {
+        job_id,
+        state: state_name.to_string(),
+        lines,
+        next_index,
+        error,
+        employee,
+    })
+}
+
+#[tauri::command]
+pub fn read_fingerprint_progress(state: State<'_, AppState>) -> CommandResult<Vec<String>> {
+    let lines = state
+        .fingerprint_progress
+        .lock()
+        .map_err(|_| "Could not read fingerprint progress.".to_string())?
+        .clone();
+    Ok(lines)
+}
+
+#[tauri::command]
+pub fn clear_fingerprint_progress(state: State<'_, AppState>) -> CommandResult<()> {
+    state
+        .fingerprint_progress
+        .lock()
+        .map_err(|_| "Could not clear fingerprint progress.".to_string())?
+        .clear();
+    Ok(())
 }
 
 #[tauri::command]

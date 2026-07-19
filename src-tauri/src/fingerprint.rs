@@ -5,6 +5,7 @@ use std::{
     process::{Command, Stdio},
     sync::{mpsc, Arc},
     thread,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -75,10 +76,12 @@ pub async fn identify_employee(db: &sqlx::SqlitePool, paths: &AppPaths) -> Resul
     for attempt in 1..=attempts {
         let helper_for_task = helper.clone();
         let storage_for_task = storage.clone();
+        let source_root_for_task = paths.source_root.clone();
         let result = tokio::task::spawn_blocking(move || {
             run_helper(
                 &helper_for_task,
                 &["identify".to_string(), path_string(&storage_for_task)],
+                &source_root_for_task,
             )
         })
         .await
@@ -139,8 +142,14 @@ pub async fn enroll_employee(
         finger.to_string(),
     ];
     let helper_for_task = helper.clone();
+    let source_root_for_task = paths.source_root.clone();
     let lines = tokio::task::spawn_blocking(move || {
-        run_helper_with_events(&helper_for_task, &args, on_line.as_deref())
+        run_helper_with_events(
+            &helper_for_task,
+            &args,
+            on_line.as_deref(),
+            &source_root_for_task,
+        )
     })
     .await
     .context("Fingerprint enrollment task failed")??;
@@ -214,17 +223,19 @@ fn is_fatal_identify_error(message: &str) -> bool {
         || lower.contains("open")
 }
 
-fn run_helper(helper: &Path, args: &[String]) -> Result<Vec<String>> {
-    run_helper_with_events(helper, args, None)
+fn run_helper(helper: &Path, args: &[String], working_dir: &Path) -> Result<Vec<String>> {
+    run_helper_with_events(helper, args, None, working_dir)
 }
 
 fn run_helper_with_events(
     helper: &Path,
     args: &[String],
     on_line: Option<&(dyn Fn(String) + Send + Sync)>,
+    working_dir: &Path,
 ) -> Result<Vec<String>> {
     let mut command = Command::new(helper);
     command.args(args);
+    command.current_dir(working_dir);
     if let Some(helper_dir) = helper.parent() {
         let existing = env::var("LD_LIBRARY_PATH").unwrap_or_default();
         let value = if existing.is_empty() {
@@ -234,6 +245,7 @@ fn run_helper_with_events(
         };
         command.env("LD_LIBRARY_PATH", value);
     }
+    command.env("G_MESSAGES_DEBUG", "");
 
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
@@ -249,31 +261,54 @@ fn run_helper_with_events(
     }
     drop(tx);
 
+    let timeout_secs = helper_timeout_seconds();
+    let started = Instant::now();
     let mut lines = Vec::new();
-    for line in rx {
-        if let Some(on_line) = on_line {
-            on_line(line.clone());
+    loop {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                if let Some(on_line) = on_line {
+                    on_line(line.clone());
+                }
+                lines.push(line);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {}
         }
-        lines.push(line);
+
+        while let Ok(line) = rx.try_recv() {
+            if let Some(on_line) = on_line {
+                on_line(line.clone());
+            }
+            lines.push(line);
+        }
+
+        if let Some(status) = child.try_wait().with_context(|| {
+            format!(
+                "Could not wait for fingerprint helper at {}",
+                helper.display()
+            )
+        })? {
+            if status.success() {
+                return Ok(lines);
+            }
+
+            let message = lines
+                .iter()
+                .find_map(|line| line.strip_prefix("ERROR|").map(str::to_string))
+                .or_else(|| lines.last().cloned())
+                .unwrap_or_else(|| format!("Fingerprint helper exited with {status}"));
+            return Err(anyhow!(message));
+        }
+
+        if timeout_secs > 0 && started.elapsed() > Duration::from_secs(timeout_secs) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(anyhow!(
+                "Fingerprint scan timed out after {timeout_secs} seconds."
+            ));
+        }
     }
-
-    let status = child.wait().with_context(|| {
-        format!(
-            "Could not wait for fingerprint helper at {}",
-            helper.display()
-        )
-    })?;
-
-    if status.success() {
-        return Ok(lines);
-    }
-
-    let message = lines
-        .iter()
-        .find_map(|line| line.strip_prefix("ERROR|").map(str::to_string))
-        .or_else(|| lines.last().cloned())
-        .unwrap_or_else(|| format!("Fingerprint helper exited with {status}"));
-    Err(anyhow!(message))
 }
 
 fn spawn_line_reader<R>(reader: R, tx: mpsc::Sender<String>)
@@ -283,11 +318,34 @@ where
     thread::spawn(move || {
         for line in BufReader::new(reader).lines().map_while(Result::ok) {
             let trimmed = line.trim().to_string();
-            if !trimmed.is_empty() {
+            if !trimmed.is_empty() && is_protocol_line(&trimmed) {
                 let _ = tx.send(trimmed);
             }
         }
     });
+}
+
+fn is_protocol_line(line: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "DEVICE|",
+        "ENROLL_STAGES|",
+        "READY|",
+        "PROGRESS|",
+        "RETRY|",
+        "ERROR|",
+        "ENROLLED|",
+        "MATCH|",
+        "NO_MATCH",
+    ];
+    PREFIXES.iter().any(|prefix| line.starts_with(prefix))
+}
+
+fn helper_timeout_seconds() -> u64 {
+    env::var("HPS_FINGERPRINT_TIMEOUT")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(360)
 }
 
 fn helper_missing_error() -> anyhow::Error {

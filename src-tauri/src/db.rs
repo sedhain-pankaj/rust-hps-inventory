@@ -1,6 +1,11 @@
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use anyhow::{Context, Result};
@@ -37,6 +42,24 @@ pub struct AppPaths {
 pub struct AppState {
     pub db: SqlitePool,
     pub paths: AppPaths,
+    pub fingerprint_progress: Arc<Mutex<Vec<String>>>,
+    pub enroll_jobs: Arc<Mutex<HashMap<String, FingerprintEnrollJob>>>,
+    pub enroll_job_seq: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FingerprintEnrollJob {
+    pub employee_id: String,
+    pub lines: Vec<String>,
+    pub done: bool,
+    pub error: Option<String>,
+}
+
+impl AppState {
+    pub fn next_enroll_job_id(&self) -> String {
+        let id = self.enroll_job_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("enroll-{id}")
+    }
 }
 
 impl AppState {
@@ -54,7 +77,7 @@ impl AppState {
             .context("Could not resolve application data directory")?;
         fs::create_dir_all(&data_dir).context("Could not create application data directory")?;
 
-        let fingerprint_dir = data_dir.join("fingerprints");
+        let fingerprint_dir = source_root.join("data").join("fingerprints");
         fs::create_dir_all(&fingerprint_dir).context("Could not create fingerprint directory")?;
 
         let db_path = source_root.join("hps.db");
@@ -82,7 +105,13 @@ impl AppState {
         seed_assets(&db).await?;
         seed_if_needed(&db, &paths).await?;
 
-        Ok(Self { db, paths })
+        Ok(Self {
+            db,
+            paths,
+            fingerprint_progress: Arc::new(Mutex::new(Vec::new())),
+            enroll_jobs: Arc::new(Mutex::new(HashMap::new())),
+            enroll_job_seq: Arc::new(AtomicU64::new(0)),
+        })
     }
 }
 

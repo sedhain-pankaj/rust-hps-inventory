@@ -2,7 +2,6 @@ import {
   escapeHtml,
   formatAction,
   invoke,
-  listen,
   setBusy,
   todayIso,
   weekStartIso,
@@ -398,23 +397,37 @@ async function renderEnrollPanel() {
     setBusy(button);
     state.enrollmentLog = ["Starting enrollment. Follow the reader prompts."];
     renderEnrollmentLog();
-    const unlisten = await listen("fingerprint_progress", (event) => {
-      state.enrollmentLog.push(event.payload);
-      renderEnrollmentLog();
-    });
     try {
-      const response = await invoke("enroll_fingerprint", {
+      const start = await invoke("start_fingerprint_enroll", {
         employeeId: form.get("employee_id"),
         finger: form.get("finger") || "right-index",
       });
-      state.selectedEmployee = response.employee;
-      state.enrollmentLog = response.messages || ["Enrollment completed."];
+      let nextIndex = 0;
+      while (true) {
+        await wait(250);
+        const status = await invoke("poll_fingerprint_enroll", {
+          jobId: start.job_id,
+          fromIndex: nextIndex,
+        });
+        nextIndex = status.next_index ?? nextIndex;
+        if (Array.isArray(status.lines) && status.lines.length) {
+          state.enrollmentLog.push(...status.lines);
+          renderEnrollmentLog();
+        }
+        if (status.state === "done") {
+          state.selectedEmployee = status.employee || state.selectedEmployee;
+          break;
+        }
+        if (status.state === "failed") {
+          throw new Error(status.error || "Enrollment failed.");
+        }
+      }
       renderEnrollPanel();
     } catch (error) {
       state.enrollmentLog = [String(error.message || error)];
+      renderEnrollmentLog();
       renderEnrollPanel();
     } finally {
-      await unlisten();
       setBusy(button, false);
     }
   });
@@ -1090,6 +1103,8 @@ function fingerOptions(selected = "right-index") {
 }
 
 function formatFingerprintLine(line) {
+  line = fingerprintEventLine(line);
+  if (!line) return "";
   if (line.startsWith("PROGRESS|")) {
     const [, completed, total] = line.split("|");
     return `Enrollment stage ${completed} of ${total}`;
@@ -1104,7 +1119,25 @@ function formatFingerprintLine(line) {
   if (line.startsWith("READY|")) return `Ready for ${line.split("|")[1]}`;
   if (line.startsWith("RETRY|")) return `Retry: ${line.split("|")[1]}`;
   if (line.startsWith("ENROLLED|")) return "Enrollment completed and stored in SQLite";
+  const lower = line.toLowerCase();
+  if (lower.includes("place") && lower.includes("finger")) {
+    return "Place your finger on the scanner.";
+  }
+  if (lower.includes("remove") && lower.includes("finger")) {
+    return "Lift your finger, then place it again.";
+  }
   return line;
+}
+
+function fingerprintEventLine(payload) {
+  if (typeof payload === "string") return payload.trim();
+  if (payload === null || payload === undefined) return "";
+  if (typeof payload === "object") {
+    if (typeof payload.line === "string") return payload.line.trim();
+    if (typeof payload.message === "string") return payload.message.trim();
+    if (typeof payload.payload === "string") return payload.payload.trim();
+  }
+  return String(payload).trim();
 }
 
 function renderEnrollmentLog() {
@@ -1115,6 +1148,10 @@ function renderEnrollmentLog() {
     ? log.map((line) => `<div>${escapeHtml(formatFingerprintLine(line))}</div>`).join("")
     : `<div>Ready to enroll.</div>`;
   logBox.scrollTop = logBox.scrollHeight;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function emptyDbValues(columns) {
