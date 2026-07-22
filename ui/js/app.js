@@ -24,6 +24,9 @@ const state = {
   selectedEmployee: null,
   selectedStock: null,
   selectedRate: null,
+  selectedCorniceStock: null,
+  selectedMould: null,
+  corniceRateMatches: [],
 };
 
 const permissionLabels = {
@@ -113,14 +116,13 @@ function renderRoleMenu() {
     `
       <button class="role-tile" data-role="admin"><strong>Admin</strong><span>Full control</span></button>
       <button class="role-tile" data-role="staff"><strong>Staff</strong><span>Clocking and daily logs</span></button>
-      <button class="role-tile" data-role="customer"><strong>Customer</strong><span>Brochure</span></button>
+      <button class="role-tile brochure-disabled" disabled title="Coming soon"><strong>Brochure</strong><span>Coming soon</span></button>
     `,
     "role-grid",
   );
   app.querySelector("[data-back]").addEventListener("click", renderHome);
   app.querySelector('[data-role="admin"]').addEventListener("click", openAdmin);
   app.querySelector('[data-role="staff"]').addEventListener("click", renderStaffPicker);
-  app.querySelector('[data-role="customer"]').addEventListener("click", renderCustomer);
 }
 
 async function openAdmin() {
@@ -162,10 +164,16 @@ async function renderStaffPicker() {
   );
   app.querySelector("[data-back]").addEventListener("click", renderRoleMenu);
   app.querySelectorAll("[data-employee]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.currentStaff = state.staff.find((item) => item.id === button.dataset.employee);
-      state.staffView = "clock";
-      renderStaffDashboard();
+    button.addEventListener("click", async () => {
+      const employee = state.staff.find((item) => item.id === button.dataset.employee);
+      try {
+        const response = await requestAuth({ title: "Staff", requireAdmin: false, employee });
+        state.currentStaff = response.employee;
+        state.staffView = "clock";
+        renderStaffDashboard();
+      } catch {
+        // Auth failed or cancelled — stay on list
+      }
     });
   });
 }
@@ -175,6 +183,10 @@ function renderAdmin() {
     ["alerts", "Alerts"],
     ["employees", "Employees"],
     ["enroll", "Enroll"],
+    ["payroll", "Payroll"],
+    ["dispatch", "Dispatch"],
+    ["cornice_stock", "Cornice Stock"],
+    ["mould_inventory", "Moulds"],
     ["stock", "Stock"],
     ["rates", "Cornice Rates"],
     ["time", "Time Clock"],
@@ -201,6 +213,10 @@ async function renderAdminPanel() {
   if (state.adminView === "alerts") return renderAlertsPanel();
   if (state.adminView === "employees") return renderEmployeesPanel();
   if (state.adminView === "enroll") return renderEnrollPanel();
+  if (state.adminView === "payroll") return renderPayrollPanel();
+  if (state.adminView === "dispatch") return renderDispatchOrdersPanel();
+  if (state.adminView === "cornice_stock") return renderCorniceStockPanel();
+  if (state.adminView === "mould_inventory") return renderMouldInventoryPanel();
   if (state.adminView === "stock") return renderStockPanel();
   if (state.adminView === "rates") return renderRatesPanel();
   if (state.adminView === "time") return renderTimePanel();
@@ -253,6 +269,13 @@ async function renderEmployeesPanel() {
         <label>Password<input name="password" type="password" placeholder="Leave blank to keep current password" /></label>
         <label class="check"><input type="checkbox" name="active" ${selected.active ? "checked" : ""} /> Active</label>
         <label class="check"><input type="checkbox" name="is_admin" ${selected.is_admin ? "checked" : ""} /> Admin</label>
+        <label>Staff Role
+          <select name="staff_category">
+            ${['cornice_hand','storekeeper','non_cornice','driver','helper'].map(c =>
+              `<option value="${c}" ${(selected.staff_category || 'cornice_hand') === c ? 'selected' : ''}>${c.replace('_', ' ')}</option>`
+            ).join('')}
+          </select>
+        </label>
         <div class="wide checkbox-row">
           ${Object.entries(permissionLabels)
             .map(
@@ -272,13 +295,14 @@ async function renderEmployeesPanel() {
         </div>
       </form>
       ${table(
-        ["Name", "ID", "Admin", "Password", "Fingerprint", "Active"],
+        ["Name", "ID", "Role", "Admin", "Password", "Fingerprint", "Active"],
         employees.map((employee) => ({
           clickable: true,
           attrs: `data-select-employee="${escapeHtml(employee.id)}"`,
           cells: [
             employee.name,
             employee.id,
+            (employee.staff_category || 'cornice_hand').replace('_', ' '),
             employee.is_admin ? "Yes" : "No",
             employee.has_password ? "Set" : "No",
             employee.has_fingerprint ? "Enrolled" : "No",
@@ -312,6 +336,7 @@ async function renderEmployeesPanel() {
         is_admin: form.get("is_admin") === "on",
         password: form.get("password"),
         permissions,
+        staff_category: form.get("staff_category") || "cornice_hand",
       },
     });
     renderEmployeesPanel();
@@ -589,7 +614,7 @@ async function renderTimePanel() {
       )}
       <h3>Today's Events</h3>
       ${table(
-        ["Time", "Employee", "Action", "Source", "Note"],
+        ["Time", "Employee", "Action", "Source", "Note", ""],
         events.map((event) => ({
           review: event.needs_admin_review,
           cells: [
@@ -598,12 +623,39 @@ async function renderTimePanel() {
             formatAction(event.action),
             event.source,
             event.note,
+            `<button class="ghost" data-edit-clock="${event.id}">Edit</button>`,
           ],
         })),
       )}
     `,
   );
   app.querySelector("[data-refresh]").addEventListener("click", renderTimePanel);
+
+  // Edit clock event handlers
+  app.querySelectorAll("[data-edit-clock]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const eventId = Number(btn.dataset.editClock);
+      const field = prompt("Field to edit (timestamp, action, work_date, source, note):");
+      if (!field) return;
+      const newVal = prompt(`New value for "${field}":`);
+      if (newVal === null) return;
+      const reason = prompt("Reason for edit (audit trail):") || "";
+      try {
+        await invoke("edit_clock_event", {
+          input: {
+            event_id: eventId,
+            field_name: field,
+            new_value: newVal,
+            reason,
+          },
+          edited_by: state.admin.id,
+        });
+        renderTimePanel();
+      } catch (e) {
+        alert(`Error: ${e}`);
+      }
+    });
+  });
 }
 
 async function renderLogsPanel() {
@@ -741,13 +793,341 @@ async function renderDatabasePanel() {
   });
 }
 
+// ==================== Admin: Payroll Panel ====================
+
+async function renderPayrollPanel() {
+  setPanel("Weekly Payroll", `<button class="ghost" data-refresh>Refresh</button>`, `<div class="message">Loading payroll…</div>`);
+  try {
+    const weekStart = getWeekStartForDate(new Date().toISOString().slice(0, 10));
+    const payrollData = await invoke("get_all_payroll_week", { request: { week_start: weekStart } });
+    const unresolved = payrollData.filter(p => p.status === "unresolved");
+
+    let body = `
+      <div class="metric-row">
+        <div class="metric"><span>Week</span><strong>${weekStart}</strong></div>
+        <div class="metric"><span>Employees</span><strong>${payrollData.length}</strong></div>
+        <div class="metric"><span>Unresolved</span><strong style="color:${unresolved.length ? '#e55' : 'inherit'}">${unresolved.length}</strong></div>
+      </div>
+    `;
+
+    if (payrollData.length === 0) {
+      body += `<div class="empty">No employees to calculate payroll for.</div>`;
+    } else {
+      body += table(
+        ["Employee", "Hours", "Known Units", "Threshold", "Base Pay", "Extra Pay", "Gross", "Status", ""],
+        payrollData.map(p => ({
+          review: p.status === "unresolved" || p.needs_admin_review,
+          cells: [
+            `${escapeHtml(p.employee_name)} (${escapeHtml(p.employee_id)})`,
+            `${p.total_hours.toFixed(1)}h`,
+            p.total_units_known.toFixed(1),
+            `${p.unit_threshold.toFixed(0)}`,
+            `$${p.base_pay.toFixed(2)}`,
+            `$${p.extra_unit_pay.toFixed(2)}`,
+            p.gross_pay !== null && p.gross_pay !== undefined ? `$${p.gross_pay.toFixed(2)}` : `<em>unresolved</em>`,
+            `<span style="color:${p.status === 'final' ? '#5a5' : p.status === 'unresolved' ? '#e55' : '#da5'}">${escapeHtml(p.status)}</span>`,
+            p.status === "review"
+              ? `<button data-proration-accept emp="${escapeHtml(p.employee_id)}" week="${escapeHtml(p.week_start)}">Accept Prorated</button> <button data-proration-override emp="${escapeHtml(p.employee_id)}" week="${escapeHtml(p.week_start)}">Use Standard 180</button>`
+              : "",
+          ],
+        }))
+      );
+
+      if (unresolved.length > 0) {
+        body += `<h3>Unresolved Rates</h3>`;
+        body += table(
+          ["Employee", "Unknown Model", "Qty", "Action"],
+          unresolved.flatMap(p =>
+            p.unknown_rate_details.map(d => ({
+              cells: [
+                `${escapeHtml(p.employee_name)} (${escapeHtml(p.employee_id)})`,
+                escapeHtml(d.model),
+                d.quantity,
+                `<button data-resolve-rate model="${escapeHtml(d.model)}">Set Rate</button>`,
+              ],
+            }))
+          )
+        );
+        app.querySelectorAll("[data-resolve-rate]").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const model = btn.dataset.model;
+            const uv = prompt(`Enter unit value for cornice "${model}" (lengths-to-units ratio):`);
+            if (uv && !isNaN(uv) && parseFloat(uv) > 0) {
+              try {
+                await invoke("resolve_unknown_rate", {
+                  input: {
+                    model,
+                    unit_value: parseFloat(uv),
+                    series: null,
+                  },
+                });
+                renderPayrollPanel();
+              } catch (e) {
+                alert(`Error: ${e}`);
+              }
+            }
+          });
+        });
+
+        app.querySelectorAll("[data-proration-accept]").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            if (!confirm("Accept the prorated unit threshold for this employee?")) return;
+            await invoke("override_payroll_proration", {
+              input: {
+                employee_id: btn.dataset.emp,
+                week_start: btn.dataset.week,
+                accept_prorated: true,
+              },
+            });
+            renderPayrollPanel();
+          });
+        });
+
+        app.querySelectorAll("[data-proration-override]").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            if (!confirm("Override to standard 40-hr / 180-unit week for this employee?")) return;
+            await invoke("override_payroll_proration", {
+              input: {
+                employee_id: btn.dataset.emp,
+                week_start: btn.dataset.week,
+                accept_prorated: false,
+              },
+            });
+            renderPayrollPanel();
+          });
+        });
+      }
+    }
+
+    setPanel("Weekly Payroll", `<button class="ghost" data-refresh>Refresh</button>`, body);
+    app.querySelector("[data-refresh]")?.addEventListener("click", renderPayrollPanel);
+  } catch (error) {
+    setPanel("Weekly Payroll", "", `<div class="message">Error loading payroll: ${escapeHtml(String(error))}</div>`);
+  }
+}
+
+// ==================== Admin: Cornice Stock Panel ====================
+
+async function renderCorniceStockPanel() {
+  const items = await invoke("list_cornice_stock");
+  const selected = state.selectedCorniceStock || { id: null, model: "", aisle: "", quantity_in_stock: 0, quantity_reserved: 0, remarks: "" };
+  setPanel(
+    "Cornice Stock",
+    `<button class="ghost" data-new-cornice-stock>New</button>`,
+    `
+      <form class="form-grid" data-cornice-stock-form>
+        <input type="hidden" name="id" value="${selected.id || ''}" />
+        <label>Model<input name="model" value="${escapeHtml(selected.model)}" /></label>
+        <label>Aisle<input name="aisle" value="${escapeHtml(selected.aisle)}" /></label>
+        <label>In Stock<input name="quantity_in_stock" type="number" value="${selected.quantity_in_stock}" /></label>
+        <label>Reserved<input name="quantity_reserved" type="number" value="${selected.quantity_reserved}" /></label>
+        <label class="wide">Remarks<textarea name="remarks">${escapeHtml(selected.remarks)}</textarea></label>
+        <div class="wide panel-actions"><button class="primary" type="submit">Save Stock</button></div>
+      </form>
+      ${table(
+        ["Model", "Aisle", "In Stock", "Reserved", "Remarks"],
+        items.map(item => ({
+          clickable: true,
+          attrs: `data-cornice-stock="${item.id}"`,
+          cells: [item.model, item.aisle, item.quantity_in_stock, item.quantity_reserved, item.remarks],
+        }))
+      )}
+    `
+  );
+  app.querySelector("[data-new-cornice-stock]").addEventListener("click", () => {
+    state.selectedCorniceStock = null;
+    renderCorniceStockPanel();
+  });
+  app.querySelectorAll("[data-cornice-stock]").forEach(row => {
+    row.addEventListener("click", () => {
+      state.selectedCorniceStock = items.find(i => i.id === Number(row.dataset.corniceStock));
+      renderCorniceStockPanel();
+    });
+  });
+  app.querySelector("[data-cornice-stock-form]").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    state.selectedCorniceStock = await invoke("save_cornice_stock", {
+      input: {
+        id: form.get("id") ? Number(form.get("id")) : null,
+        model: form.get("model"),
+        aisle: form.get("aisle"),
+        quantity_in_stock: Number(form.get("quantity_in_stock") || 0),
+        quantity_reserved: Number(form.get("quantity_reserved") || 0),
+        remarks: form.get("remarks"),
+      },
+    });
+    renderCorniceStockPanel();
+  });
+}
+
+// ==================== Admin: Mould Inventory Panel ====================
+
+async function renderMouldInventoryPanel() {
+  const items = await invoke("list_mould_inventory");
+  const selected = state.selectedMould || { id: null, mould_name: "", storage_location: "", notes: "" };
+  setPanel(
+    "Mould Inventory",
+    `<button class="ghost" data-new-mould>New</button>`,
+    `
+      <form class="form-grid" data-mould-form>
+        <input type="hidden" name="id" value="${selected.id || ''}" />
+        <label>Mould Name<input name="mould_name" value="${escapeHtml(selected.mould_name)}" /></label>
+        <label>Storage Location<input name="storage_location" value="${escapeHtml(selected.storage_location)}" /></label>
+        <label class="wide">Notes<textarea name="notes">${escapeHtml(selected.notes)}</textarea></label>
+        <div class="wide panel-actions"><button class="primary" type="submit">Save Mould</button></div>
+      </form>
+      ${table(
+        ["Mould Name", "Location", "Notes"],
+        items.map(item => ({
+          clickable: true,
+          attrs: `data-mould="${item.id}"`,
+          cells: [item.mould_name, item.storage_location, item.notes],
+        }))
+      )}
+    `
+  );
+  app.querySelector("[data-new-mould]").addEventListener("click", () => {
+    state.selectedMould = null;
+    renderMouldInventoryPanel();
+  });
+  app.querySelectorAll("[data-mould]").forEach(row => {
+    row.addEventListener("click", () => {
+      state.selectedMould = items.find(i => i.id === Number(row.dataset.mould));
+      renderMouldInventoryPanel();
+    });
+  });
+  app.querySelector("[data-mould-form]").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    state.selectedMould = await invoke("save_mould_inventory", {
+      input: {
+        id: form.get("id") ? Number(form.get("id")) : null,
+        mould_name: form.get("mould_name"),
+        storage_location: form.get("storage_location"),
+        notes: form.get("notes"),
+      },
+    });
+    renderMouldInventoryPanel();
+  });
+}
+
+// ==================== Admin: Dispatch Orders Panel ====================
+
+async function renderDispatchOrdersPanel() {
+  const orders = await invoke("list_dispatch_orders", { status: null });
+  setPanel(
+    "Dispatch Orders",
+    `<button class="ghost" data-new-dispatch>New Order</button>`,
+    `
+      <form class="form-grid" data-dispatch-form style="display:none">
+        <label>Cornice Model<input name="cornice_model" required /></label>
+        <label>Quantity<input name="quantity" type="number" min="1" required /></label>
+        <label>Delivery Location<input name="delivery_location" required /></label>
+        <label class="wide">Remarks<textarea name="remarks"></textarea></label>
+        <div class="wide panel-actions">
+          <button class="primary" type="submit">Create Order</button>
+          <button class="ghost" type="button" data-cancel-dispatch>Cancel</button>
+        </div>
+      </form>
+      ${table(
+        ["Model", "Qty", "Location", "Status", "Created", "Delivered By", ""],
+        orders.map(o => ({
+          review: o.status === "pending",
+          cells: [
+            o.cornice_model,
+            o.quantity,
+            o.delivery_location,
+            `<span style="color:${o.status === 'delivered' ? '#5a5' : o.status === 'pending' ? '#e55' : '#da5'}">${escapeHtml(o.status)}</span>`,
+            o.created_at.replace("T", " "),
+            o.delivered_by_name || "—",
+            o.status === "pending" ? `<button data-mark-progress="${o.id}">Start</button>` : "",
+          ],
+        }))
+      )}
+    `
+  );
+
+  const form = app.querySelector("[data-dispatch-form]");
+  app.querySelector("[data-new-dispatch]").addEventListener("click", () => {
+    form.style.display = "";
+  });
+  app.querySelector("[data-cancel-dispatch]")?.addEventListener("click", () => {
+    form.style.display = "none";
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    await invoke("create_dispatch_order", {
+      input: {
+        id: null,
+        cornice_model: fd.get("cornice_model"),
+        quantity: Number(fd.get("quantity")),
+        delivery_location: fd.get("delivery_location"),
+        status: null,
+        remarks: fd.get("remarks"),
+      },
+      createdBy: state.admin.id,
+    });
+    renderDispatchOrdersPanel();
+  });
+
+  app.querySelectorAll("[data-mark-progress]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await invoke("update_dispatch_order", {
+        input: {
+          id: Number(btn.dataset.markProgress),
+          cornice_model: "",
+          quantity: 0,
+          delivery_location: "",
+          status: "in_progress",
+          remarks: "",
+        },
+        updatedBy: state.admin.id,
+      });
+      renderDispatchOrdersPanel();
+    });
+  });
+}
+
+function getWeekStartForDate(dateStr) {
+  const d = new Date(dateStr);
+  const day = d.getDay();
+  const diff = (day + 5) % 7;
+  d.setDate(d.getDate() - diff);
+  return d.toISOString().slice(0, 10);
+}
+
 function renderStaffDashboard() {
   const employee = state.currentStaff;
+  const category = employee.staff_category || "cornice_hand";
   const tabs = [["clock", "Clock"]];
-  if (employee.permissions.includes("cornice_log")) tabs.push(["cornice", "Cornice"]);
-  if (employee.permissions.includes("production_log")) tabs.push(["production", "Production"]);
+  if (category === "cornice_hand" && employee.permissions.includes("cornice_log")) {
+    tabs.push(["cornice", "Cornice"]);
+    tabs.push(["payroll", "My Payroll"]);
+  }
+  if (category === "storekeeper") {
+    if (employee.permissions.includes("cornice_log")) tabs.push(["cornice", "Cornice Logs"]);
+    tabs.push(["moulds", "Moulds"]);
+    tabs.push(["cornice_stock", "Stock"]);
+    if (employee.permissions.includes("production_log")) tabs.push(["production", "Production"]);
+    if (employee.permissions.includes("deliveries")) tabs.push(["deliveries", "Deliveries"]);
+  }
+  if (category === "non_cornice" && employee.permissions.includes("production_log")) {
+    tabs.push(["production", "Production"]);
+    tabs.push(["payroll", "My Payroll"]);
+  }
+  if (category === "driver") {
+    tabs.push(["dispatch", "Dispatch Orders"]);
+    if (employee.permissions.includes("deliveries")) tabs.push(["deliveries", "Deliveries"]);
+    tabs.push(["moulds", "Moulds"]);
+  }
+  if (category === "helper") {
+    tabs.push(["moulds", "Moulds"]);
+    tabs.push(["cornice_stock_ro", "Stock"]);
+  }
+  // Legacy permissions fallback
   if (employee.permissions.includes("overstock")) tabs.push(["overstock", "Overstock"]);
-  if (employee.permissions.includes("deliveries")) tabs.push(["deliveries", "Deliveries"]);
   if (employee.permissions.includes("cornice_rates_view")) tabs.push(["rates", "Rates"]);
 
   app.innerHTML = workspaceShell("Staff", employee.name, tabs, state.staffView);
@@ -768,6 +1148,11 @@ async function renderStaffPanel() {
   if (view === "production") return renderStaffProduction();
   if (view === "overstock") return renderStaffOverstock();
   if (view === "deliveries") return renderStaffDeliveries();
+  if (view === "dispatch") return renderDriverDispatchView();
+  if (view === "moulds") return renderStaffMouldView();
+  if (view === "cornice_stock") return renderCorniceStockPanel();
+  if (view === "cornice_stock_ro") return renderStaffCorniceStockRO();
+  if (view === "payroll") return renderStaffPayroll();
   return renderStaffRates();
 }
 
@@ -830,8 +1215,12 @@ async function renderStaffCornice() {
     "",
     `
       <form class="form-grid" data-cornice-form>
-        <label>Series<input name="series" placeholder="Optional" /></label>
-        <label>Model<input name="model" required /></label>
+        <label>Series<input name="series" placeholder="Auto-filled on match" /></label>
+        <label>Model
+          <input name="model" id="cornice-model-input" required list="cornice-models-datalist" placeholder="Start typing cornice model…" autocomplete="off" />
+          <datalist id="cornice-models-datalist"></datalist>
+          <div id="cornice-search-results" class="message" style="display:none;margin-top:0.5em;font-size:0.9em;"></div>
+        </label>
         <label>Lengths<input name="lengths" type="number" min="1" required /></label>
         <div class="panel-actions"><button class="primary" type="submit">Add Log</button></div>
       </form>
@@ -851,15 +1240,66 @@ async function renderStaffCornice() {
       )}
     `,
   );
+
+  // Fuzzy search autocomplete for cornice model
+  const modelInput = app.querySelector("#cornice-model-input");
+  const datalist = app.querySelector("#cornice-models-datalist");
+  const resultsBox = app.querySelector("#cornice-search-results");
+  let searchTimeout = null;
+
+  modelInput.addEventListener("input", async () => {
+    const query = modelInput.value.trim();
+    clearTimeout(searchTimeout);
+    if (query.length < 2) {
+      datalist.innerHTML = "";
+      resultsBox.style.display = "none";
+      return;
+    }
+    searchTimeout = setTimeout(async () => {
+      try {
+        const resp = await invoke("search_cornice_rates", { request: { query } });
+        const matches = resp.matches || [];
+        state.corniceRateMatches = matches;
+        datalist.innerHTML = matches.slice(0, 15).map(m =>
+          `<option value="${escapeHtml(m.model)}">${escapeHtml(m.series ? m.series + ' ' : '')}${escapeHtml(m.model)} (${m.unit_text})</option>`
+        ).join("");
+        if (matches.length > 0) {
+          resultsBox.textContent = `${matches.length} match(es). Select or keep typing.`;
+          resultsBox.style.display = "block";
+        } else {
+          resultsBox.textContent = `No match found — will be logged as unknown/custom.`;
+          resultsBox.style.display = "block";
+        }
+      } catch { /* ignore */ }
+    }, 200);
+  });
+
+  modelInput.addEventListener("focus", async () => {
+    const query = modelInput.value.trim();
+    if (query.length >= 2) return;
+    // Show all rates on focus if no input
+    try {
+      const resp = await invoke("search_cornice_rates", { request: { query: "" } });
+      datalist.innerHTML = "";
+    } catch { /* ignore */ }
+  });
+
   app.querySelector("[data-cornice-form]").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const modelVal = form.get("model");
+    // Auto-fill series from match
+    let series = form.get("series");
+    if (!series) {
+      const match = state.corniceRateMatches.find(m => m.model.toLowerCase() === modelVal.toLowerCase());
+      if (match) series = match.series;
+    }
     await invoke("add_cornice_log", {
       input: {
         employee_id: state.currentStaff.id,
         log_date: todayIso(),
-        series: form.get("series"),
-        model: form.get("model"),
+        series: series || "",
+        model: modelVal,
         lengths: Number(form.get("lengths")),
       },
     });
@@ -981,6 +1421,53 @@ async function renderStaffDeliveries() {
   });
 }
 
+async function renderDriverDispatchView() {
+  const pending = await invoke("list_dispatch_orders", { status: "pending" });
+  const inProgress = await invoke("list_dispatch_orders", { status: "in_progress" });
+  let body = "";
+
+  if (pending.length > 0 || inProgress.length > 0) {
+    const allOrders = [...inProgress, ...pending];
+    body = table(
+      ["Model", "Qty", "Location", "Status", "Created", ""],
+      allOrders.map(o => ({
+        review: o.status === "pending",
+        cells: [
+          o.cornice_model,
+          o.quantity,
+          o.delivery_location,
+          `<span style="color:${o.status === 'delivered' ? '#5a5' : o.status === 'pending' ? '#e55' : '#da5'}">${escapeHtml(o.status)}</span>`,
+          o.created_at.replace("T", " "),
+          `<button data-deliver-order="${o.id}">Mark Delivered</button>`,
+        ],
+      }))
+    );
+  } else {
+    body = `<div class="empty">No pending dispatch orders.</div>`;
+  }
+
+  setPanel("Dispatch Orders", `<button class="ghost" data-refresh>Refresh</button>`, body);
+  app.querySelector("[data-refresh]")?.addEventListener("click", renderDriverDispatchView);
+
+  app.querySelectorAll("[data-deliver-order]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const remarks = prompt("Delivery remarks (optional):") || "";
+      await invoke("update_dispatch_order", {
+        input: {
+          id: Number(btn.dataset.deliverOrder),
+          cornice_model: "",
+          quantity: 0,
+          delivery_location: "",
+          status: "delivered",
+          remarks,
+        },
+        updatedBy: state.currentStaff.id,
+      });
+      renderDriverDispatchView();
+    });
+  });
+}
+
 async function renderStaffRates() {
   const rates = await invoke("list_cornice_rates");
   setPanel(
@@ -993,6 +1480,89 @@ async function renderStaffRates() {
       })),
     ),
   );
+}
+
+async function renderStaffMouldView() {
+  const items = await invoke("list_mould_inventory");
+  setPanel(
+    "Mould Inventory (Read-Only)",
+    `<button class="ghost" data-refresh>Refresh</button>`,
+    items.length > 0
+      ? table(
+          ["Mould Name", "Location", "Notes"],
+          items.map(item => ({
+            cells: [item.mould_name, item.storage_location, item.notes],
+          }))
+        )
+      : `<div class="empty">No moulds registered.</div>`
+  );
+  app.querySelector("[data-refresh]")?.addEventListener("click", renderStaffMouldView);
+}
+
+async function renderStaffCorniceStockRO() {
+  const items = await invoke("list_cornice_stock");
+  setPanel(
+    "Cornice Stock (Read-Only)",
+    `<button class="ghost" data-refresh>Refresh</button>`,
+    items.length > 0
+      ? table(
+          ["Model", "Aisle", "In Stock", "Reserved"],
+          items.map(item => ({
+            cells: [item.model, item.aisle, item.quantity_in_stock, item.quantity_reserved],
+          }))
+        )
+      : `<div class="empty">No cornice stock registered.</div>`
+  );
+  app.querySelector("[data-refresh]")?.addEventListener("click", renderStaffCorniceStockRO);
+}
+
+async function renderStaffPayroll() {
+  try {
+    const payroll = await invoke("get_payroll_week", {
+      request: {
+        employee_id: state.currentStaff.id,
+        week_start: null,
+      },
+    });
+    let body = `
+      <div class="metric-row">
+        <div class="metric"><span>Week</span><strong>${escapeHtml(payroll.week_start)}</strong></div>
+        <div class="metric"><span>Hours</span><strong>${payroll.total_hours.toFixed(1)}h</strong></div>
+        <div class="metric"><span>Status</span><strong style="color:${payroll.status === 'final' ? '#5a5' : payroll.status === 'unresolved' ? '#e55' : '#da5'}">${escapeHtml(payroll.status)}</strong></div>
+      </div>
+    `;
+
+    body += `<h3>Pay Breakdown</h3>`;
+    body += `<table class="table"><tbody>`;
+    body += `<tr><td>Base Pay</td><td><strong>$${payroll.base_pay.toFixed(2)}</strong></td></tr>`;
+    body += `<tr><td>Known Units</td><td>${payroll.total_units_known.toFixed(1)}</td></tr>`;
+    body += `<tr><td>Unit Threshold</td><td>${payroll.unit_threshold.toFixed(0)} <small>(${escapeHtml(payroll.threshold_note)})</small></td></tr>`;
+    if (payroll.extra_unit_pay > 0) {
+      body += `<tr><td>Extra Unit Pay (${payroll.total_units_known - payroll.unit_threshold} extra × $3.80)</td><td><strong>$${payroll.extra_unit_pay.toFixed(2)}</strong></td></tr>`;
+    }
+    if (payroll.gross_pay !== null && payroll.gross_pay !== undefined) {
+      body += `<tr style="font-size:1.2em"><td><strong>Gross Pay</strong></td><td><strong>$${payroll.gross_pay.toFixed(2)}</strong></td></tr>`;
+    }
+    body += `</tbody></table>`;
+
+    if (payroll.unknown_rate_details.length > 0) {
+      body += `<div class="message" style="margin-top:1em">Unknown-rate cornices pending admin resolution:</div>`;
+      body += table(
+        ["Model", "Quantity"],
+        payroll.unknown_rate_details.map(d => ({
+          review: true,
+          cells: [d.model, d.quantity],
+        }))
+      );
+      body += `<div class="message">Equation: ${escapeHtml(payroll.pay_equation)}</div>`;
+    } else {
+      body += `<div class="message">Pay equation: ${escapeHtml(payroll.pay_equation)}</div>`;
+    }
+
+    setPanel("My Weekly Payroll", "", body);
+  } catch (error) {
+    setPanel("My Weekly Payroll", "", `<div class="message">Error: ${escapeHtml(String(error))}</div>`);
+  }
 }
 
 function screenShell(title, subtitle, content, contentClass = "") {
@@ -1236,5 +1806,6 @@ function emptyEmployee() {
     active: true,
     is_admin: false,
     permissions: ["clock"],
+    staff_category: "cornice_hand",
   };
 }

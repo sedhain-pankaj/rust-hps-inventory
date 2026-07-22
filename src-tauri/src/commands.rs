@@ -344,6 +344,21 @@ pub async fn save_employee(
     .await
     .map_err(to_string)?;
 
+    // Update staff_category if provided and valid
+    let category = input.staff_category.trim();
+    if !category.is_empty()
+        && ["cornice_hand", "storekeeper", "non_cornice", "driver", "helper"]
+            .iter()
+            .any(|c| *c == category)
+    {
+        sqlx::query("UPDATE employees SET staff_category = ? WHERE id = ?")
+            .bind(category)
+            .bind(input.id.trim())
+            .execute(&state.db)
+            .await
+            .map_err(to_string)?;
+    }
+
     let mut permissions = input.permissions;
     if input.is_admin {
         for permission in [
@@ -1393,6 +1408,1044 @@ pub async fn list_deliveries(
     .map_err(to_string)?;
 
     Ok(rows.into_iter().map(delivery_from_row).collect())
+}
+
+// ==================== Mould Inventory ====================
+
+#[tauri::command]
+pub async fn list_mould_inventory(state: State<'_, AppState>) -> CommandResult<Vec<MouldInventory>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, mould_name, storage_location, notes, updated_at
+        FROM mould_inventory
+        ORDER BY mould_name COLLATE NOCASE
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    Ok(rows.into_iter().map(mould_from_row).collect())
+}
+
+#[tauri::command]
+pub async fn save_mould_inventory(
+    state: State<'_, AppState>,
+    input: MouldInventoryInput,
+) -> CommandResult<MouldInventory> {
+    if input.mould_name.trim().is_empty() {
+        return Err("Mould name is required.".to_string());
+    }
+    let now = crate::db::now_string();
+    let id = if let Some(id) = input.id {
+        sqlx::query(
+            r#"
+            UPDATE mould_inventory
+            SET mould_name = ?, storage_location = ?, notes = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(input.mould_name.trim())
+        .bind(input.storage_location.trim())
+        .bind(input.notes.trim())
+        .bind(&now)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+        id
+    } else {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO mould_inventory (mould_name, storage_location, notes, updated_at)
+            VALUES (?, ?, ?, ?)
+            "#,
+        )
+        .bind(input.mould_name.trim())
+        .bind(input.storage_location.trim())
+        .bind(input.notes.trim())
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+        result.last_insert_rowid()
+    };
+
+    mould_by_id(&state.db, id).await
+}
+
+// ==================== Cornice Stock ====================
+
+#[tauri::command]
+pub async fn list_cornice_stock(state: State<'_, AppState>) -> CommandResult<Vec<CorniceStock>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, model, aisle, quantity_in_stock, quantity_reserved, remarks, updated_at
+        FROM cornice_stock
+        ORDER BY model COLLATE NOCASE
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    Ok(rows.into_iter().map(cornice_stock_from_row).collect())
+}
+
+#[tauri::command]
+pub async fn save_cornice_stock(
+    state: State<'_, AppState>,
+    input: CorniceStockInput,
+) -> CommandResult<CorniceStock> {
+    if input.model.trim().is_empty() {
+        return Err("Model is required.".to_string());
+    }
+    let now = crate::db::now_string();
+    let id = if let Some(id) = input.id {
+        sqlx::query(
+            r#"
+            UPDATE cornice_stock
+            SET model = ?, aisle = ?, quantity_in_stock = ?, quantity_reserved = ?, remarks = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(input.model.trim())
+        .bind(input.aisle.trim())
+        .bind(input.quantity_in_stock)
+        .bind(input.quantity_reserved)
+        .bind(input.remarks.trim())
+        .bind(&now)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+        id
+    } else {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO cornice_stock (model, aisle, quantity_in_stock, quantity_reserved, remarks, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(input.model.trim())
+        .bind(input.aisle.trim())
+        .bind(input.quantity_in_stock)
+        .bind(input.quantity_reserved)
+        .bind(input.remarks.trim())
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+        result.last_insert_rowid()
+    };
+
+    cornice_stock_by_id(&state.db, id).await
+}
+
+// ==================== Clock Event Edit (Audit Trail) ====================
+
+#[tauri::command]
+pub async fn edit_clock_event(
+    state: State<'_, AppState>,
+    input: EditClockEventInput,
+    edited_by: String,
+) -> CommandResult<ClockEvent> {
+    let field = input.field_name.trim();
+    let new_val = input.new_value.trim().to_string();
+
+    // Validate field name
+    if !["timestamp", "action", "work_date", "source", "note"].contains(&field) {
+        return Err(format!("Cannot edit field '{}'. Allowed: timestamp, action, work_date, source, note", field));
+    }
+
+    // Get old value
+    let old_row = sqlx::query(
+        r#"
+        SELECT t.*, e.name AS employee_name
+        FROM time_clock_events t
+        JOIN employees e ON e.id = t.employee_id
+        WHERE t.id = ?
+        "#,
+    )
+    .bind(input.event_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    let old_value: String = old_row.get(field);
+
+    // Validate action if editing that field
+    if field == "action" && !["clock_in", "clock_out"].contains(&new_val.as_str()) {
+        return Err("Action must be 'clock_in' or 'clock_out'.".to_string());
+    }
+
+    // Perform the update
+    let assignments = format!("{} = ?", field);
+    sqlx::query(format!("UPDATE time_clock_events SET {assignments}, needs_admin_review = 1 WHERE id = ?").as_str())
+        .bind(&new_val)
+        .bind(input.event_id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+
+    // Log the edit
+    sqlx::query(
+        r#"
+        INSERT INTO clock_event_edits (event_id, edited_by, field_name, old_value, new_value, reason, edited_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(input.event_id)
+    .bind(edited_by.trim())
+    .bind(field)
+    .bind(&old_value)
+    .bind(&new_val)
+    .bind(input.reason.trim())
+    .bind(crate::db::now_string())
+    .execute(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    // Raise alert for payroll-affecting edit
+    let employee_name: String = old_row.get("employee_name");
+    notification(
+        &state.db,
+        "yellow",
+        "clock_edit",
+        &format!("{} edited {} clock event field '{}' from '{}' to '{}'", edited_by, employee_name, field, old_value, new_val),
+        "time_clock_events",
+        Some(input.event_id),
+    )
+    .await
+    .map_err(to_string)?;
+
+    // Return updated event
+    let row = sqlx::query(
+        r#"
+        SELECT t.*, e.name AS employee_name
+        FROM time_clock_events t
+        JOIN employees e ON e.id = t.employee_id
+        WHERE t.id = ?
+        "#,
+    )
+    .bind(input.event_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    Ok(clock_event_from_row(row))
+}
+
+#[tauri::command]
+pub async fn list_clock_event_edits(
+    state: State<'_, AppState>,
+    event_id: Option<i64>,
+) -> CommandResult<Vec<ClockEventEdit>> {
+    let mut sql = String::from(
+        r#"
+        SELECT ce.*, e.name AS editor_name
+        FROM clock_event_edits ce
+        JOIN employees e ON e.id = ce.edited_by
+        "#,
+    );
+
+    if let Some(eid) = event_id {
+        sql.push_str(" WHERE ce.event_id = ?");
+        let rows = sqlx::query(&sql)
+            .bind(eid)
+            .fetch_all(&state.db)
+            .await
+            .map_err(to_string)?;
+        let mut edits = Vec::new();
+        for row in rows {
+            edits.push(ClockEventEdit {
+                id: row.get("id"),
+                event_id: row.get("event_id"),
+                edited_by: row.get("editor_name"),
+                field_name: row.get("field_name"),
+                old_value: row.get("old_value"),
+                new_value: row.get("new_value"),
+                reason: row.get("reason"),
+                edited_at: row.get("edited_at"),
+            });
+        }
+        return Ok(edits);
+    }
+
+    sql.push_str(" ORDER BY ce.edited_at DESC, ce.id DESC");
+    let rows = sqlx::query(&sql).fetch_all(&state.db).await.map_err(to_string)?;
+    let mut edits = Vec::new();
+    for row in rows {
+        edits.push(ClockEventEdit {
+            id: row.get("id"),
+            event_id: row.get("event_id"),
+            edited_by: row.get("editor_name"),
+            field_name: row.get("field_name"),
+            old_value: row.get("old_value"),
+            new_value: row.get("new_value"),
+            reason: row.get("reason"),
+            edited_at: row.get("edited_at"),
+        });
+    }
+    Ok(edits)
+}
+
+// ==================== Fuzzy Search Cornice Rates ====================
+
+#[tauri::command]
+pub async fn search_cornice_rates(
+    state: State<'_, AppState>,
+    request: SearchCorniceRatesRequest,
+) -> CommandResult<SearchCorniceRatesResponse> {
+    let query = request.query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Ok(SearchCorniceRatesResponse { matches: Vec::new() });
+    }
+
+    // Get all rates and do fuzzy matching in Rust (Levenshtein-like scoring)
+    let rows = sqlx::query(
+        r#"
+        SELECT id, series, model, unit_text, unit_value
+        FROM cornice_rates
+        ORDER BY model COLLATE NOCASE
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    let mut matches: Vec<CorniceRateMatch> = Vec::new();
+    for row in rows {
+        let model: String = row.get("model");
+        let model_lower = model.to_ascii_lowercase();
+
+        // Scoring: exact match, starts_with, contains, levenshtein-like
+        let score = if model_lower == query {
+            1000
+        } else if model_lower.starts_with(&query) {
+            500
+        } else if model_lower.contains(&query) {
+            200
+        } else {
+            // Character-level similarity score
+            let common: usize = query.chars().filter(|c| model_lower.contains(*c)).count();
+            if common >= query.len().saturating_sub(1) && common > 0 {
+                common as u32 * 10
+            } else {
+                0
+            }
+        };
+
+        if score > 0 {
+            matches.push(CorniceRateMatch {
+                id: row.get("id"),
+                series: row.get("series"),
+                model,
+                unit_text: row.get("unit_text"),
+                unit_value: row.get("unit_value"),
+                score,
+            });
+        }
+    }
+
+    matches.sort_by(|a, b| b.score.cmp(&a.score).then(a.model.cmp(&b.model)));
+    matches.truncate(20);
+
+    Ok(SearchCorniceRatesResponse { matches })
+}
+
+// ==================== Payroll Engine ====================
+
+#[tauri::command]
+pub async fn get_payroll_week(
+    state: State<'_, AppState>,
+    request: PayrollWeekRequest,
+) -> CommandResult<PayrollWeekResponse> {
+    let employee = employee_by_id(&state.db, &request.employee_id)
+        .await
+        .map_err(to_string)?
+        .ok_or_else(|| "Employee not found.".to_string())?;
+
+    let now_date = chrono::Local::now().date_naive();
+    let req_week_start = request.week_start.as_ref()
+        .and_then(|ws| chrono::NaiveDate::parse_from_str(ws, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| crate::db::week_start_for(now_date));
+
+    let week_end = req_week_start + chrono::Duration::days(6);
+
+    // Total hours from clock events
+    let clock_rows = sqlx::query(
+        r#"
+        SELECT * FROM time_clock_events
+        WHERE employee_id = ? AND work_date >= ? AND work_date <= ?
+        ORDER BY timestamp ASC, id ASC
+        "#,
+    )
+    .bind(&employee.id)
+    .bind(req_week_start.format("%Y-%m-%d").to_string())
+    .bind(week_end.format("%Y-%m-%d").to_string())
+    .fetch_all(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    let (total_seconds, ..) = seconds_from_event_rows(&clock_rows, false);
+    let total_hours = total_seconds as f64 / 3600.0;
+
+    // Cornice logs for the week
+    let cornice_rows = sqlx::query(
+        r#"
+        SELECT model, lengths, unit_value, is_custom
+        FROM cornice_logs
+        WHERE employee_id = ? AND week_start = ?
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(&employee.id)
+    .bind(req_week_start.format("%Y-%m-%d").to_string())
+    .fetch_all(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    let mut total_units_known: f64 = 0.0;
+    let mut unknown_details: Vec<UnknownRateDetail> = Vec::new();
+    for row in &cornice_rows {
+        let is_custom: i64 = row.get("is_custom");
+        let unit_value: Option<f64> = row.get("unit_value");
+        let lengths: i64 = row.get("lengths");
+
+        if is_custom != 0 || unit_value.is_none() {
+            let model: String = row.get("model");
+            // Merge with existing unknown detail for same model
+            if let Some(existing) = unknown_details.iter_mut().find(|d| d.model == model) {
+                existing.quantity += lengths;
+            } else {
+                unknown_details.push(UnknownRateDetail { model, quantity: lengths });
+            }
+        } else if let Some(uv) = unit_value {
+            total_units_known += uv * lengths as f64;
+        }
+    }
+
+    let total_units_unknown: f64 = unknown_details.iter().map(|d| d.quantity as f64).sum();
+
+    // Attendance-adjusted threshold (§5.4)
+    let (unit_threshold, threshold_note, needs_review_hours) = if (39.0..=41.0).contains(&total_hours) || total_hours == 0.0 {
+        (180.0, "Standard week (39-41 hr band or no hours)".to_string(), false)
+    } else {
+        let prorated = total_hours * 4.5;
+        (prorated, format!("Prorated: {:.1} hrs × 4.5 = {:.1} units (outside 39-41 hr band)", total_hours, prorated), true)
+    };
+
+    // Base pay
+    let base_pay = 1140.0_f64;
+
+    // Extra unit calculation
+    let (gross_pay, extra_unit_pay, pay_equation, status) = if !unknown_details.is_empty() {
+        // Unknown rate equation (§5.3)
+        let known_part = total_units_known.floor() as i64;
+        let unknown_parts: Vec<String> = unknown_details
+            .iter()
+            .map(|d| format!("{}×{}", d.quantity, d.model))
+            .collect();
+        let eq = format!(
+            "{} units + {} − {:.0} (base units)",
+            known_part,
+            unknown_parts.join(" + "),
+            unit_threshold
+        );
+        (None, 0.0, eq, "unresolved".to_string())
+    } else {
+        let extra_units = (total_units_known - unit_threshold).max(0.0);
+        let eup = extra_units * 3.80;
+        let gp = base_pay + eup;
+        let eq = format!(
+            "${:.2} (base) + ${:.2} ({:.0} extra units × $3.80) = ${:.2}",
+            base_pay, eup, extra_units, gp
+        );
+        (Some(gp), eup, eq, if needs_review_hours { "review" } else { "final" }.to_string())
+    };
+
+    // Persist payroll period
+    let week_end_str = week_end.format("%Y-%m-%d").to_string();
+    let gross_for_db = gross_pay.unwrap_or(0.0);
+    let needs_review = needs_review_hours || status == "unresolved";
+
+    sqlx::query(
+        r#"
+        INSERT INTO payroll_periods
+            (employee_id, week_start, week_end, total_hours, total_units_known, unit_threshold,
+             base_pay, extra_unit_pay, gross_pay, status, unknown_rate_equation, needs_admin_review, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(employee_id, week_start) DO UPDATE SET
+            week_end = excluded.week_end,
+            total_hours = excluded.total_hours,
+            total_units_known = excluded.total_units_known,
+            unit_threshold = excluded.unit_threshold,
+            base_pay = excluded.base_pay,
+            extra_unit_pay = excluded.extra_unit_pay,
+            gross_pay = excluded.gross_pay,
+            status = excluded.status,
+            unknown_rate_equation = excluded.unknown_rate_equation,
+            needs_admin_review = excluded.needs_admin_review,
+            created_at = excluded.created_at
+        "#,
+    )
+    .bind(&employee.id)
+    .bind(req_week_start.format("%Y-%m-%d").to_string())
+    .bind(&week_end_str)
+    .bind(total_hours)
+    .bind(total_units_known)
+    .bind(unit_threshold)
+    .bind(base_pay)
+    .bind(extra_unit_pay)
+    .bind(gross_for_db)
+    .bind(&status)
+    .bind(&pay_equation)
+    .bind(needs_review as i64)
+    .bind(crate::db::now_string())
+    .execute(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    // Raise alert for unresolved or outside-band
+    if status == "unresolved" {
+        notification(
+            &state.db,
+            "red",
+            "payroll_unresolved",
+            &format!("{} has unknown-rate cornice units for week {}. Pay cannot be finalized.", employee.name, req_week_start.format("%Y-%m-%d")),
+            "payroll_periods",
+            None,
+        )
+        .await
+        .ok();
+    } else if needs_review_hours {
+        notification(
+            &state.db,
+            "yellow",
+            "payroll_proration",
+            &format!("{} worked {:.1} hrs for week {} (outside 39-41 band). Prorated threshold: {:.0} units. Admin review needed.", employee.name, total_hours, req_week_start.format("%Y-%m-%d"), unit_threshold),
+            "payroll_periods",
+            None,
+        )
+        .await
+        .ok();
+    }
+
+    Ok(PayrollWeekResponse {
+        employee_id: employee.id,
+        employee_name: employee.name,
+        week_start: req_week_start.format("%Y-%m-%d").to_string(),
+        week_end: week_end_str,
+        total_hours,
+        total_units_known,
+        total_units_unknown,
+        unknown_rate_details: unknown_details,
+        unit_threshold,
+        threshold_note,
+        base_pay,
+        extra_unit_pay,
+        gross_pay,
+        pay_equation,
+        status,
+        needs_admin_review: needs_review,
+    })
+}
+
+#[tauri::command]
+pub async fn get_all_payroll_week(
+    state: State<'_, AppState>,
+    request: AdminPayrollWeekRequest,
+) -> CommandResult<Vec<PayrollWeekResponse>> {
+    let now_date = chrono::Local::now().date_naive();
+    let req_week_start = request.week_start.as_ref()
+        .and_then(|ws| chrono::NaiveDate::parse_from_str(ws, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| crate::db::week_start_for(now_date));
+
+    let employees = list_employees(&state.db, true).await.map_err(to_string)?;
+    let mut results = Vec::new();
+
+    for employee in employees {
+        let result = get_payroll_week_inner(
+            &state.db,
+            &employee.id,
+            &employee.name,
+            req_week_start,
+        )
+        .await;
+        if let Ok(r) = result {
+            results.push(r);
+        }
+    }
+
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn resolve_unknown_rate(
+    state: State<'_, AppState>,
+    input: ResolveUnknownRateInput,
+) -> CommandResult<CorniceRate> {
+    let model = input.model.trim();
+    if model.is_empty() {
+        return Err("Model name is required.".to_string());
+    }
+    if input.unit_value <= 0.0 {
+        return Err("Unit value must be positive.".to_string());
+    }
+
+    let now = crate::db::now_string();
+    let series = input.series.as_deref().unwrap_or_default().trim().to_string();
+
+    // Check if rate already exists
+    let existing = sqlx::query(
+        r#"
+        SELECT id FROM cornice_rates
+        WHERE lower(model) = lower(?)
+        "#,
+    )
+    .bind(model)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    let id = if let Some(row) = existing {
+        let existing_id: i64 = row.get("id");
+        sqlx::query(
+            r#"
+            UPDATE cornice_rates
+            SET unit_value = ?, is_confidential = 0, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(input.unit_value)
+        .bind(&now)
+        .bind(existing_id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+        existing_id
+    } else {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO cornice_rates (series, model, unit_text, unit_value, is_confidential, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?)
+            "#,
+        )
+        .bind(&series)
+        .bind(model)
+        .bind(format!("{:.2} units/m", input.unit_value))
+        .bind(input.unit_value)
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+        result.last_insert_rowid()
+    };
+
+    // Update cornice_logs that had this model as custom/unknown — recalculate units
+    sqlx::query(
+        r#"
+        UPDATE cornice_logs
+        SET unit_value = ?, total_units = lengths * ?, is_custom = 0, needs_admin_review = 0, updated_at = ?
+        WHERE lower(model) = lower(?) AND (is_custom = 1 OR unit_value IS NULL)
+        "#,
+    )
+    .bind(input.unit_value)
+    .bind(input.unit_value)
+    .bind(&now)
+    .bind(model)
+    .execute(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    // Resolve related payroll alerts
+    sqlx::query(
+        r#"
+        UPDATE admin_notifications
+        SET resolved = 1
+        WHERE kind = 'payroll_unresolved'
+          AND message LIKE ?
+          AND resolved = 0
+        "#,
+    )
+    .bind(format!("%{}%", model))
+    .execute(&state.db)
+    .await
+    .ok();
+
+    cornice_rate_by_id(&state.db, id).await
+}
+
+// ==================== Helper functions for new commands ====================
+
+async fn get_payroll_week_inner(
+    db: &sqlx::SqlitePool,
+    employee_id: &str,
+    employee_name: &str,
+    week_start: chrono::NaiveDate,
+) -> Result<PayrollWeekResponse, String> {
+    let week_end = week_start + chrono::Duration::days(6);
+
+    let clock_rows = sqlx::query(
+        r#"
+        SELECT * FROM time_clock_events
+        WHERE employee_id = ? AND work_date >= ? AND work_date <= ?
+        ORDER BY timestamp ASC, id ASC
+        "#,
+    )
+    .bind(employee_id)
+    .bind(week_start.format("%Y-%m-%d").to_string())
+    .bind(week_end.format("%Y-%m-%d").to_string())
+    .fetch_all(db)
+    .await
+    .map_err(to_string)?;
+
+    let (total_seconds, ..) = seconds_from_event_rows(&clock_rows, false);
+    let total_hours = total_seconds as f64 / 3600.0;
+
+    let cornice_rows = sqlx::query(
+        r#"
+        SELECT model, lengths, unit_value, is_custom
+        FROM cornice_logs
+        WHERE employee_id = ? AND week_start = ?
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(employee_id)
+    .bind(week_start.format("%Y-%m-%d").to_string())
+    .fetch_all(db)
+    .await
+    .map_err(to_string)?;
+
+    let mut total_units_known: f64 = 0.0;
+    let mut unknown_details: Vec<UnknownRateDetail> = Vec::new();
+    for row in &cornice_rows {
+        let is_custom: i64 = row.get("is_custom");
+        let unit_value: Option<f64> = row.get("unit_value");
+        let lengths: i64 = row.get("lengths");
+
+        if is_custom != 0 || unit_value.is_none() {
+            let model: String = row.get("model");
+            if let Some(existing) = unknown_details.iter_mut().find(|d| d.model == model) {
+                existing.quantity += lengths;
+            } else {
+                unknown_details.push(UnknownRateDetail { model, quantity: lengths });
+            }
+        } else if let Some(uv) = unit_value {
+            total_units_known += uv * lengths as f64;
+        }
+    }
+
+    let (unit_threshold, threshold_note, needs_review_hours) = if (39.0..=41.0).contains(&total_hours) || total_hours == 0.0 {
+        (180.0, "Standard week".to_string(), false)
+    } else {
+        let prorated = total_hours * 4.5;
+        (prorated, format!("Prorated: {:.1} hrs × 4.5", total_hours), true)
+    };
+
+    let base_pay = 1140.0_f64;
+    let (gross_pay, extra_unit_pay, pay_equation, status) = if !unknown_details.is_empty() {
+        let known_part = total_units_known.floor() as i64;
+        let unknown_parts: Vec<String> = unknown_details.iter().map(|d| format!("{}×{}", d.quantity, d.model)).collect();
+        let eq = format!("{} units + {} − {:.0} (base)", known_part, unknown_parts.join(" + "), unit_threshold);
+        (None, 0.0, eq, "unresolved".to_string())
+    } else {
+        let extra_units = (total_units_known - unit_threshold).max(0.0);
+        let eup = extra_units * 3.80;
+        let gp = base_pay + eup;
+        let eq = format!("${:.2} + ${:.2} ({:.0} extra × $3.80) = ${:.2}", base_pay, eup, extra_units, gp);
+        (Some(gp), eup, eq, if needs_review_hours { "review" } else { "final" }.to_string())
+    };
+
+    Ok(PayrollWeekResponse {
+        employee_id: employee_id.to_string(),
+        employee_name: employee_name.to_string(),
+        week_start: week_start.format("%Y-%m-%d").to_string(),
+        week_end: week_end.format("%Y-%m-%d").to_string(),
+        total_hours,
+        total_units_known,
+        total_units_unknown: unknown_details.iter().map(|d| d.quantity as f64).sum(),
+        unknown_rate_details: unknown_details,
+        unit_threshold,
+        threshold_note,
+        base_pay,
+        extra_unit_pay,
+        gross_pay,
+        pay_equation,
+        status: status.clone(),
+        needs_admin_review: needs_review_hours || status == "unresolved",
+    })
+}
+
+// ==================== Dispatch Orders ====================
+
+#[tauri::command]
+pub async fn list_dispatch_orders(
+    state: State<'_, AppState>,
+    status: Option<String>,
+) -> CommandResult<Vec<DispatchOrder>> {
+    if let Some(s) = status {
+        let rows = sqlx::query(
+            r#"
+            SELECT d.*, e.name AS created_by_name, de.name AS delivered_by_name
+            FROM dispatch_orders d
+            JOIN employees e ON e.id = d.created_by
+            LEFT JOIN employees de ON de.id = d.delivered_by
+            WHERE d.status = ?
+            ORDER BY d.created_at DESC, d.id DESC
+            "#,
+        )
+        .bind(s)
+        .fetch_all(&state.db)
+        .await
+        .map_err(to_string)?;
+        return Ok(rows.into_iter().map(dispatch_order_from_row).collect());
+    }
+
+    let rows = sqlx::query(
+        r#"
+        SELECT d.*, e.name AS created_by_name, de.name AS delivered_by_name
+        FROM dispatch_orders d
+        JOIN employees e ON e.id = d.created_by
+        LEFT JOIN employees de ON de.id = d.delivered_by
+        ORDER BY d.created_at DESC, d.id DESC
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(to_string)?;
+    Ok(rows.into_iter().map(dispatch_order_from_row).collect())
+}
+
+#[tauri::command]
+pub async fn create_dispatch_order(
+    state: State<'_, AppState>,
+    input: DispatchOrderInput,
+    created_by: String,
+) -> CommandResult<DispatchOrder> {
+    if input.cornice_model.trim().is_empty() {
+        return Err("Cornice model is required.".to_string());
+    }
+    if input.quantity <= 0 {
+        return Err("Quantity must be positive.".to_string());
+    }
+    if input.delivery_location.trim().is_empty() {
+        return Err("Delivery location is required.".to_string());
+    }
+
+    let now = crate::db::now_string();
+    let result = sqlx::query(
+        r#"
+        INSERT INTO dispatch_orders (cornice_model, quantity, delivery_location, status, created_by, remarks, created_at)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?)
+        "#,
+    )
+    .bind(input.cornice_model.trim())
+    .bind(input.quantity)
+    .bind(input.delivery_location.trim())
+    .bind(created_by.trim())
+    .bind(input.remarks.trim())
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    dispatch_order_by_id(&state.db, result.last_insert_rowid()).await
+}
+
+#[tauri::command]
+pub async fn update_dispatch_order(
+    state: State<'_, AppState>,
+    input: DispatchOrderInput,
+    updated_by: String,
+) -> CommandResult<DispatchOrder> {
+    let id = input.id.ok_or_else(|| "Order ID is required.".to_string())?;
+
+    let mut assignments = Vec::new();
+    let mut binds: Vec<&str> = Vec::new();
+
+    if let Some(status) = &input.status {
+        if !["pending", "in_progress", "delivered"].contains(&status.trim()) {
+            return Err("Status must be 'pending', 'in_progress', or 'delivered'.".to_string());
+        }
+        assignments.push("status = ?");
+        binds.push(status.trim());
+    }
+    if !input.remarks.trim().is_empty() {
+        assignments.push("remarks = ?");
+        binds.push(input.remarks.trim());
+    }
+
+    // If marking as delivered, set delivered_by and delivered_at
+    let now_str = crate::db::now_string();
+    if input.status.as_deref() == Some("delivered") {
+        assignments.push("delivered_by = ?");
+        binds.push(updated_by.trim());
+        assignments.push("delivered_at = ?");
+        binds.push(&now_str);
+    }
+
+    if assignments.is_empty() {
+        return dispatch_order_by_id(&state.db, id).await;
+    }
+
+    let placeholders = assignments.join(", ");
+    let sql = format!("UPDATE dispatch_orders SET {placeholders} WHERE id = ?");
+    let mut query = sqlx::query(&sql);
+    for b in binds {
+        query = query.bind(b);
+    }
+    query.bind(id).execute(&state.db).await.map_err(to_string)?;
+
+    dispatch_order_by_id(&state.db, id).await
+}
+
+// ==================== Payroll Proration Override ====================
+
+#[tauri::command]
+pub async fn override_payroll_proration(
+    state: State<'_, AppState>,
+    input: OverridePayrollProrationInput,
+) -> CommandResult<PayrollWeekResponse> {
+    let employee_id = input.employee_id.trim();
+    let week_start_str = input.week_start.trim();
+
+    let employee = employee_by_id(&state.db, employee_id)
+        .await
+        .map_err(to_string)?
+        .ok_or_else(|| "Employee not found.".to_string())?;
+
+    let week_start = chrono::NaiveDate::parse_from_str(week_start_str, "%Y-%m-%d")
+        .map_err(|_| "Invalid week_start date format. Use YYYY-MM-DD.".to_string())?;
+
+    // If overriding to standard (not accept_prorated), update the payroll_periods record
+    if !input.accept_prorated {
+        sqlx::query(
+            r#"
+            UPDATE payroll_periods
+            SET unit_threshold = 180.0,
+                status = 'review',
+                unknown_rate_equation = 'Overridden to standard 40-hr / 180-unit week by admin.',
+                needs_admin_review = 1
+            WHERE employee_id = ? AND week_start = ?
+            "#,
+        )
+        .bind(employee_id)
+        .bind(week_start_str)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+    } else {
+        sqlx::query(
+            r#"
+            UPDATE payroll_periods
+            SET status = 'final',
+                needs_admin_review = 0
+            WHERE employee_id = ? AND week_start = ?
+            "#,
+        )
+        .bind(employee_id)
+        .bind(week_start_str)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+    }
+
+    // Resolve the related alert
+    sqlx::query(
+        r#"
+        UPDATE admin_notifications
+        SET resolved = 1
+        WHERE kind = 'payroll_proration'
+          AND message LIKE ?
+          AND resolved = 0
+        "#,
+    )
+    .bind(format!("%{}%", employee_id))
+    .execute(&state.db)
+    .await
+    .ok();
+
+    // Recalculate and return
+    get_payroll_week_inner(&state.db, employee_id, &employee.name, week_start).await
+}
+
+fn dispatch_order_from_row(row: sqlx::sqlite::SqliteRow) -> DispatchOrder {
+    DispatchOrder {
+        id: row.get("id"),
+        cornice_model: row.get("cornice_model"),
+        quantity: row.get("quantity"),
+        delivery_location: row.get("delivery_location"),
+        status: row.get("status"),
+        created_by_id: row.get("created_by"),
+        created_by_name: row.get("created_by_name"),
+        delivered_by_name: row.get("delivered_by_name"),
+        delivered_at: row.get("delivered_at"),
+        remarks: row.get("remarks"),
+        created_at: row.get("created_at"),
+    }
+}
+
+async fn dispatch_order_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<DispatchOrder> {
+    let row = sqlx::query(
+        r#"
+        SELECT d.*, e.name AS created_by_name, de.name AS delivered_by_name
+        FROM dispatch_orders d
+        JOIN employees e ON e.id = d.created_by
+        LEFT JOIN employees de ON de.id = d.delivered_by
+        WHERE d.id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .map_err(to_string)?;
+    Ok(dispatch_order_from_row(row))
+}
+
+fn mould_from_row(row: sqlx::sqlite::SqliteRow) -> MouldInventory {
+    MouldInventory {
+        id: row.get("id"),
+        mould_name: row.get("mould_name"),
+        storage_location: row.get("storage_location"),
+        notes: row.get("notes"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+async fn mould_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<MouldInventory> {
+    let row = sqlx::query(
+        "SELECT id, mould_name, storage_location, notes, updated_at FROM mould_inventory WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .map_err(to_string)?;
+    Ok(mould_from_row(row))
+}
+
+fn cornice_stock_from_row(row: sqlx::sqlite::SqliteRow) -> CorniceStock {
+    CorniceStock {
+        id: row.get("id"),
+        model: row.get("model"),
+        aisle: row.get("aisle"),
+        quantity_in_stock: row.get("quantity_in_stock"),
+        quantity_reserved: row.get("quantity_reserved"),
+        remarks: row.get("remarks"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+async fn cornice_stock_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<CorniceStock> {
+    let row = sqlx::query(
+        "SELECT id, model, aisle, quantity_in_stock, quantity_reserved, remarks, updated_at FROM cornice_stock WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .map_err(to_string)?;
+    Ok(cornice_stock_from_row(row))
 }
 
 fn admin_table_config(name: &str) -> CommandResult<&'static AdminTable> {

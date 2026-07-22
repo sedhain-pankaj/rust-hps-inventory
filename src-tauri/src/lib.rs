@@ -56,7 +56,27 @@ pub fn run() {
             add_overstock,
             list_overstock,
             add_delivery,
-            list_deliveries
+            list_deliveries,
+            // New: mould inventory
+            list_mould_inventory,
+            save_mould_inventory,
+            // New: cornice stock
+            list_cornice_stock,
+            save_cornice_stock,
+            // New: clock event editing
+            edit_clock_event,
+            list_clock_event_edits,
+            // New: fuzzy search
+            search_cornice_rates,
+            // New: payroll
+            get_payroll_week,
+            get_all_payroll_week,
+            resolve_unknown_rate,
+            override_payroll_proration,
+            // New: dispatch orders
+            list_dispatch_orders,
+            create_dispatch_order,
+            update_dispatch_order,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Hopkins kiosk");

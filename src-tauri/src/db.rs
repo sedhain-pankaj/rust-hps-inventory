@@ -102,6 +102,7 @@ impl AppState {
         };
 
         migrate(&db).await?;
+        run_column_migrations(&db).await?;
         seed_assets(&db).await?;
         seed_if_needed(&db, &paths).await?;
 
@@ -329,6 +330,171 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
     )
     .execute(db)
     .await?;
+
+    // Mould inventory — which mould, where it's stored. Read-only for all staff, editable by storekeeper/admin.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS mould_inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mould_name TEXT NOT NULL,
+            storage_location TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            UNIQUE (mould_name)
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    // Cornice stock — actual castings: which cornice, aisle, in-stock qty, reserved qty.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS cornice_stock (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model TEXT NOT NULL,
+            aisle TEXT NOT NULL DEFAULT '',
+            quantity_in_stock INTEGER NOT NULL DEFAULT 0,
+            quantity_reserved INTEGER NOT NULL DEFAULT 0,
+            remarks TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            UNIQUE (model)
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    // Dispatch orders — admin creates, driver views and logs against them.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS dispatch_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cornice_model TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            delivery_location TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'delivered')),
+            created_by TEXT NOT NULL,
+            delivered_by TEXT,
+            delivered_at TEXT,
+            remarks TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (created_by) REFERENCES employees(id),
+            FOREIGN KEY (delivered_by) REFERENCES employees(id)
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    // Clock event edit audit trail.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS clock_event_edits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            edited_by TEXT NOT NULL,
+            field_name TEXT NOT NULL,
+            old_value TEXT NOT NULL,
+            new_value TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            edited_at TEXT NOT NULL,
+            FOREIGN KEY (event_id) REFERENCES time_clock_events(id),
+            FOREIGN KEY (edited_by) REFERENCES employees(id)
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    // Payroll periods — weekly pay records per employee.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS payroll_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id TEXT NOT NULL,
+            week_start TEXT NOT NULL,
+            week_end TEXT NOT NULL,
+            total_hours REAL NOT NULL DEFAULT 0,
+            total_units_known REAL NOT NULL DEFAULT 0,
+            unit_threshold REAL NOT NULL DEFAULT 180,
+            base_pay REAL NOT NULL DEFAULT 1140.0,
+            extra_unit_pay REAL NOT NULL DEFAULT 0.0,
+            gross_pay REAL NOT NULL DEFAULT 0.0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            unknown_rate_equation TEXT NOT NULL DEFAULT '',
+            needs_admin_review INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE (employee_id, week_start),
+            FOREIGN KEY (employee_id) REFERENCES employees(id)
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    // Add staff_category column to employees if it doesn't exist.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS _schema_migration_log (
+            migration_id TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+async fn run_column_migrations(db: &SqlitePool) -> Result<()> {
+    let migrations = [
+        (
+            "add_staff_category_to_employees",
+            r#"ALTER TABLE employees ADD COLUMN staff_category TEXT NOT NULL DEFAULT 'cornice_hand'"#,
+        ),
+    ];
+
+    for (migration_id, sql) in migrations {
+        let applied: Option<String> = sqlx::query(
+            "SELECT migration_id FROM _schema_migration_log WHERE migration_id = ?",
+        )
+        .bind(migration_id)
+        .fetch_optional(db)
+        .await?
+        .map(|row| row.get::<String, _>("migration_id"));
+
+        if applied.is_none() {
+            // Check if the column already exists by trying a query
+            let exists: Option<i64> = sqlx::query(
+                "SELECT COUNT(*) as cnt FROM pragma_table_info('employees') WHERE name = 'staff_category'",
+            )
+            .fetch_one(db)
+            .await?
+            .get("cnt");
+
+            if exists == Some(0) {
+                sqlx::query(sql).execute(db).await?;
+                sqlx::query(
+                    "INSERT OR REPLACE INTO _schema_migration_log (migration_id, applied_at) VALUES (?, ?)",
+                )
+                .bind(migration_id)
+                .bind(now_string())
+                .execute(db)
+                .await?;
+            } else {
+                // Column exists but migration wasn't logged
+                sqlx::query(
+                    "INSERT OR REPLACE INTO _schema_migration_log (migration_id, applied_at) VALUES (?, ?)",
+                )
+                .bind(migration_id)
+                .bind(now_string())
+                .execute(db)
+                .await?;
+            }
+        }
+    }
 
     Ok(())
 }
@@ -746,6 +912,7 @@ async fn employee_from_row(
         is_admin: row.get::<i64, _>("is_admin") != 0,
         has_password: row.get::<Option<String>, _>("password_hash").is_some(),
         has_fingerprint: row.get::<i64, _>("has_fingerprint") != 0,
+        staff_category: row.try_get("staff_category").unwrap_or_else(|_| "cornice_hand".to_string()),
     })
 }
 

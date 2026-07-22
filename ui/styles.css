@@ -514,3 +514,18 @@ label {
     display: none;
   }
 }
+
+
+/* Disabled brochure button */
+.brochure-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Cornice search results */
+#cornice-search-results {
+  font-size: 0.85em;
+  color: #666;
+}
+
