@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Cornice Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#17181a;
+    --panel:#1f2124;
+    --panel-2:#252729;
+    --line:#34373a;
+    --amber:#e8a33d;
+    --amber-dim:#8a6626;
+    --bone:#f1ede3;
+    --muted:#8b8b85;
+    --green:#7cbf6e;
+    --red:#d9645b;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--bone);font-family:'Inter',-apple-system,sans-serif;}
+  body{
+    padding-bottom:env(safe-area-inset-bottom);
+    max-width:480px;
+    margin:0 auto;
+    min-height:100vh;
+  }
+  .topbar{
+    position:sticky; top:0; z-index:20;
+    background:var(--bg);
+    padding:16px 16px 10px 16px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{
+    display:flex; align-items:baseline; justify-content:space-between;
+  }
+  .brand h1{
+    font-family:'Oswald',sans-serif;
+    font-size:20px;
+    letter-spacing:0.06em;
+    margin:0;
+    text-transform:uppercase;
+    color:var(--bone);
+  }
+  .brand h1 span{color:var(--amber);}
+  .gear{
+    background:none; border:1px solid var(--line); color:var(--muted);
+    width:34px; height:34px; border-radius:8px; font-size:16px;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+  .week-label{
+    font-family:'JetBrains Mono',monospace;
+    font-size:11px; color:var(--muted); letter-spacing:0.03em;
+    text-align:center; flex:1;
+  }
+  .week-nav{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-top:6px;
+  }
+  .week-arrow{
+    background:none; border:1px solid var(--line); color:var(--amber);
+    width:30px; height:30px; border-radius:8px; font-size:16px;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    flex-shrink:0;
+  }
+  .week-arrow:active{background:rgba(232,163,61,0.12);}
+
+  .section{padding:14px 16px;}
+  .section-title{
+    font-family:'Oswald',sans-serif;
+    font-size:11px; letter-spacing:0.12em; text-transform:uppercase;
+    color:var(--muted); margin:0 0 10px 2px;
+  }
+
+  /* Day chips */
+  .day-row{display:flex; gap:6px; overflow-x:auto; padding-bottom:2px;}
+  .day-chip{
+    flex:1; min-width:44px;
+    font-family:'JetBrains Mono',monospace;
+    font-size:12px; text-align:center;
+    padding:9px 4px;
+    border-radius:8px;
+    border:1px solid var(--line);
+    background:var(--panel);
+    color:var(--muted);
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .day-chip.active{
+    border-color:var(--amber);
+    color:var(--amber);
+    background:rgba(232,163,61,0.08);
+  }
+  .day-chip .dot{
+    display:block; width:4px; height:4px; border-radius:50%;
+    background:var(--amber); margin:4px auto 0;
+    opacity:0;
+  }
+  .day-chip.has-entries .dot{opacity:1;}
+
+  /* Entry form */
+  .entry-card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:12px;
+  }
+  .field-label{
+    font-size:10px; text-transform:uppercase; letter-spacing:0.08em;
+    color:var(--muted); margin-bottom:5px; display:block;
+  }
+  .code-wrap{position:relative;}
+  input[type=text], input[type=number]{
+    width:100%;
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    border-radius:8px;
+    color:var(--bone);
+    font-family:'JetBrains Mono',monospace;
+    font-size:16px;
+    padding:11px 12px;
+    outline:none;
+  }
+  input[type=text]:focus, input[type=number]:focus{border-color:var(--amber);}
+  .rate-hint{
+    position:absolute; right:10px; top:50%; transform:translateY(-50%);
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--green);
+    pointer-events:none;
+  }
+  .rate-hint.unknown{color:var(--red);}
+  .suggestions{
+    position:absolute; left:0; right:0; top:calc(100% + 4px);
+    background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
+    max-height:180px; overflow-y:auto; z-index:30;
+    display:none;
+  }
+  .suggestions.open{display:block;}
+  .suggestion-item{
+    padding:9px 12px; font-family:'JetBrains Mono',monospace; font-size:13px;
+    display:flex; justify-content:space-between; cursor:pointer; color:var(--bone);
+  }
+  .suggestion-item:hover, .suggestion-item.sel{background:rgba(232,163,61,0.1);}
+  .suggestion-item span.r{color:var(--amber);}
+
+  .variant-chips{display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;}
+  .variant-chip{
+    font-family:'JetBrains Mono',monospace; font-size:12px;
+    padding:6px 10px; border-radius:7px; border:1px solid var(--amber-dim);
+    color:var(--amber); background:rgba(232,163,61,0.08); cursor:pointer;
+  }
+  .variant-chip.sel{background:var(--amber); color:#1a1a1a; font-weight:600;}
+  .form-row{display:flex; gap:8px; margin-top:10px;}
+  .form-row .qty{width:88px;}
+  .add-btn{
+    flex:1;
+    background:var(--amber);
+    color:#1a1a1a;
+    border:none; border-radius:8px;
+    font-family:'Oswald',sans-serif;
+    font-weight:600; letter-spacing:0.04em; text-transform:uppercase;
+    font-size:14px;
+    cursor:pointer;
+  }
+  .add-btn:disabled{opacity:0.35;}
+
+  /* ledger rows */
+  .ledger{
+    margin-top:10px;
+    border-top:1px dashed var(--line);
+  }
+  .ledger-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 2px;
+    border-bottom:1px dashed var(--line);
+    font-family:'JetBrains Mono',monospace;
+    font-size:13px;
+  }
+  .ledger-row .lcode{color:var(--bone); font-weight:500; min-width:70px;}
+  .ledger-row .lmeta{color:var(--muted); flex:1; text-align:left; padding-left:8px;}
+  .ledger-row .lunits{color:var(--amber); font-weight:600; margin-right:10px;}
+  .del-btn{
+    background:none; border:none; color:var(--muted);
+    font-size:16px; cursor:pointer; padding:2px 6px;
+  }
+  .empty-note{
+    text-align:center; color:var(--muted); font-size:12.5px; padding:18px 8px;
+    font-family:'Inter',sans-serif;
+  }
+  .day-total-line{
+    display:flex; justify-content:space-between; padding:10px 2px 2px 2px;
+    font-family:'Oswald',sans-serif; font-size:13px; letter-spacing:0.03em;
+    color:var(--bone); text-transform:uppercase;
+  }
+  .day-total-line b{color:var(--amber); font-family:'JetBrains Mono',monospace;}
+
+  /* week table */
+  .week-table{width:100%; border-collapse:collapse;}
+  .week-table th{
+    text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.07em;
+    color:var(--muted); padding-bottom:6px; border-bottom:1px solid var(--line);
+    font-family:'Oswald',sans-serif;
+  }
+  .week-table th:last-child, .week-table td:last-child{text-align:right;}
+  .week-table td{
+    padding:8px 0; border-bottom:1px solid rgba(255,255,255,0.05);
+    font-family:'JetBrains Mono',monospace; font-size:13px;
+  }
+  .week-table tr.active-day td{color:var(--amber);}
+
+  /* summary panel */
+  .summary{
+    background:linear-gradient(180deg, #1c1d1f, #151617);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:16px;
+    margin-top:4px;
+  }
+  .summary-row{
+    display:flex; justify-content:space-between; align-items:baseline;
+    padding:6px 0;
+    font-family:'JetBrains Mono',monospace; font-size:13px;
+    color:var(--muted);
+    border-bottom:1px solid rgba(255,255,255,0.06);
+  }
+  .summary-row:last-of-type{border-bottom:none;}
+  .summary-row .v{color:var(--bone);}
+  .summary-total{
+    margin-top:10px; padding-top:12px; border-top:1px solid var(--line);
+    display:flex; justify-content:space-between; align-items:baseline;
+  }
+  .summary-total .lbl{
+    font-family:'Oswald',sans-serif; font-size:13px; text-transform:uppercase;
+    letter-spacing:0.06em; color:var(--muted);
+  }
+  .summary-total .amt{
+    font-family:'JetBrains Mono',monospace; font-weight:700; font-size:26px; color:var(--green);
+  }
+
+  .footer-actions{
+    display:flex; gap:8px; padding:6px 16px 24px 16px;
+  }
+  .ghost-btn{
+    flex:1; background:none; border:1px solid var(--line); color:var(--muted);
+    padding:11px; border-radius:9px; font-family:'Oswald',sans-serif;
+    font-size:12px; letter-spacing:0.05em; text-transform:uppercase; cursor:pointer;
+  }
+  .ghost-btn.danger{color:var(--red); border-color:rgba(217,100,91,0.3);}
+
+  /* settings modal */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:50;
+    display:none; align-items:flex-end;
+  }
+  .modal-overlay.open{display:flex;}
+  .modal{
+    background:var(--panel); width:100%; max-width:480px; margin:0 auto;
+    border-radius:16px 16px 0 0; padding:18px 16px calc(24px + env(safe-area-inset-bottom)) 16px;
+    border:1px solid var(--line); border-bottom:none;
+  }
+  .modal h2{
+    font-family:'Oswald',sans-serif; font-size:15px; text-transform:uppercase;
+    letter-spacing:0.06em; margin:0 0 14px 0;
+  }
+  .settings-row{margin-bottom:12px;}
+  .settings-row label{
+    font-size:11px; text-transform:uppercase; color:var(--muted); letter-spacing:0.06em;
+    display:block; margin-bottom:5px;
+  }
+  .close-modal{
+    width:100%; margin-top:8px;
+    background:var(--amber); color:#1a1a1a; border:none; border-radius:9px;
+    padding:12px; font-family:'Oswald',sans-serif; font-weight:600; text-transform:uppercase;
+    letter-spacing:0.05em; font-size:14px; cursor:pointer;
+  }
+  .toast{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    background:var(--panel-2); border:1px solid var(--line); color:var(--bone);
+    padding:9px 16px; border-radius:20px; font-size:12.5px; z-index:60;
+    opacity:0; transition:opacity 0.25s; pointer-events:none;
+  }
+  .toast.show{opacity:1;}
+
+  /* Rate Book overlay */
+  .rates-overlay{
+    position:fixed; inset:0; z-index:55;
+    background:var(--bg);
+    display:none;
+    flex-direction:column;
+    max-width:480px; margin:0 auto;
+  }
+  .rates-overlay.open{display:flex;}
+  .rates-header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px; border-bottom:1px solid var(--line);
+    padding-top:calc(16px + env(safe-area-inset-top));
+  }
+  .rates-header h2{
+    font-family:'Oswald',sans-serif; font-size:16px; text-transform:uppercase;
+    letter-spacing:0.06em; margin:0; color:var(--bone);
+  }
+  .back-btn{
+    background:none; border:1px solid var(--line); color:var(--bone);
+    width:34px; height:34px; border-radius:8px; font-size:20px; cursor:pointer;
+  }
+  .rates-add-cat{
+    background:none; border:1px solid var(--amber-dim); color:var(--amber);
+    border-radius:8px; padding:8px 10px; font-family:'Oswald',sans-serif;
+    font-size:11px; letter-spacing:0.05em; text-transform:uppercase; cursor:pointer;
+  }
+  .rates-search-wrap{padding:12px 16px 4px 16px;}
+  .rates-body{flex:1; overflow-y:auto; padding:8px 16px 40px 16px;}
+
+  .cat-block{
+    border:1px solid var(--line); border-radius:12px; margin-bottom:10px;
+    background:var(--panel); overflow:hidden;
+  }
+  .cat-head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 12px; cursor:pointer;
+  }
+  .cat-head-left{display:flex; align-items:center; gap:8px;}
+  .cat-name{
+    font-family:'Oswald',sans-serif; font-size:13px; letter-spacing:0.04em;
+    text-transform:uppercase; color:var(--bone);
+  }
+  .cat-count{
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--muted);
+  }
+  .cat-chevron{
+    color:var(--muted); font-size:12px; transition:transform 0.15s;
+  }
+  .cat-block.open .cat-chevron{transform:rotate(90deg);}
+  .cat-actions{display:flex; gap:6px;}
+  .icon-btn{
+    background:none; border:none; color:var(--muted); font-size:14px;
+    padding:4px 6px; cursor:pointer;
+  }
+  .cat-codes{display:none; border-top:1px solid var(--line);}
+  .cat-block.open .cat-codes{display:block;}
+  .code-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:9px 12px; border-bottom:1px solid rgba(255,255,255,0.05);
+    font-family:'JetBrains Mono',monospace; font-size:13px;
+  }
+  .code-row .cname{color:var(--bone); min-width:72px;}
+  .code-row .crates{color:var(--amber); flex:1; text-align:left; padding-left:8px; font-size:12px;}
+  .add-code-row{
+    padding:10px 12px;
+  }
+  .add-code-row button{
+    width:100%; background:none; border:1px dashed var(--amber-dim); color:var(--amber);
+    border-radius:8px; padding:9px; font-family:'Oswald',sans-serif; font-size:12px;
+    letter-spacing:0.04em; text-transform:uppercase; cursor:pointer;
+  }
+  .rate-row-item{
+    display:flex; gap:8px; align-items:center; margin-bottom:6px;
+  }
+  .rate-row-item input{flex:1;}
+  .rate-row-item .icon-btn{color:var(--red);}
+  select#editCategory{
+    width:100%; background:var(--panel-2); border:1px solid var(--line);
+    border-radius:8px; color:var(--bone); font-family:'JetBrains Mono',monospace;
+    font-size:14px; padding:11px 12px; outline:none;
+  }
+</style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="brand">
+      <h1>Cornice <span>Ledger</span></h1>
+      <div style="display:flex; gap:8px;">
+        <button class="gear" id="rateBookBtn" title="Rate Book">📖</button>
+        <button class="gear" id="settingsBtn" title="Pay Settings">⚙</button>
+      </div>
+    </div>
+    <div class="week-nav">
+      <button class="week-arrow" id="prevWeekBtn">‹</button>
+      <div class="week-label" id="weekLabel">Loading…</div>
+      <button class="week-arrow" id="nextWeekBtn">›</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Day</div>
+    <div class="day-row" id="dayRow"></div>
+  </div>
+
+  <div class="section" style="padding-top:0;">
+    <div class="section-title">Add Entry — <span id="activeDayName"></span> <span id="entryCount" style="color:var(--amber);"></span></div>
+    <div class="entry-card">
+      <span class="field-label">Cornice Code</span>
+      <div class="code-wrap">
+        <input type="text" id="codeInput" placeholder="e.g. 923" autocomplete="off">
+        <span class="rate-hint" id="rateHint"></span>
+        <div class="suggestions" id="suggestions"></div>
+      </div>
+      <div class="variant-chips" id="variantChips" style="display:none;"></div>
+      <div class="form-row">
+        <div style="flex:1;">
+          <span class="field-label">Length Made</span>
+          <input type="number" id="qtyInput" placeholder="Qty" inputmode="decimal">
+        </div>
+        <div style="width:110px;">
+          <span class="field-label">Units/Length</span>
+          <input type="number" id="rateInput" placeholder="Units" inputmode="decimal" step="0.01">
+        </div>
+      </div>
+      <div class="form-row">
+        <button class="add-btn" id="addBtn">+ Add to Ledger</button>
+      </div>
+
+      <div class="ledger" id="dayLedger"></div>
+      <div class="day-total-line" id="dayTotalLine" style="display:none;"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Week So Far</div>
+    <div class="entry-card">
+      <table class="week-table">
+        <thead><tr><th>Day</th><th>Entries</th><th>Units</th></tr></thead>
+        <tbody id="weekTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Estimate</div>
+    <div class="summary">
+      <div class="summary-row"><span>Total units this week</span><span class="v" id="sumUnits">0</span></div>
+      <div class="summary-row"><span>Base pay (<span id="sumHoursLbl">40</span> hrs × $<span id="sumRateLbl">28.50</span>)</span><span class="v" id="sumBase">$0.00</span></div>
+      <div class="summary-row"><span>Units covered by base</span><span class="v" id="sumBaseUnits">180</span></div>
+      <div class="summary-row"><span>Remaining units</span><span class="v" id="sumRemUnits">0</span></div>
+      <div class="summary-row"><span>Extra pay (× $<span id="sumExtraRateLbl">3.80</span>/unit)</span><span class="v" id="sumExtra">$0.00</span></div>
+      <div class="summary-total">
+        <span class="lbl">Estimated Pay</span>
+        <span class="amt" id="sumTotal">$0.00</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-actions">
+    <button class="ghost-btn" id="thisWeekBtn">This Week</button>
+    <button class="ghost-btn danger" id="clearDayBtn">Clear Day</button>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Rate Book overlay -->
+  <div class="rates-overlay" id="ratesOverlay">
+    <div class="rates-header">
+      <button class="back-btn" id="ratesCloseBtn">‹</button>
+      <h2>Rate Book</h2>
+      <button class="rates-add-cat" id="addCategoryBtn">+ Section</button>
+    </div>
+    <div class="rates-search-wrap">
+      <input type="text" id="rateSearchInput" placeholder="Search code…" autocomplete="off">
+    </div>
+    <div class="rates-body" id="categoryList"></div>
+  </div>
+
+  <!-- Add / edit code modal -->
+  <div class="modal-overlay" id="codeModalOverlay">
+    <div class="modal">
+      <h2 id="codeModalTitle">Add Cornice</h2>
+      <div class="settings-row">
+        <label>Code</label>
+        <input type="text" id="editCode" placeholder="e.g. 923" autocomplete="off">
+      </div>
+      <div class="settings-row">
+        <label>Section</label>
+        <select id="editCategory"></select>
+      </div>
+      <div class="settings-row">
+        <label>Units per length made — add more than one if this code has multiple moulds</label>
+        <div id="editRatesList"></div>
+        <button class="ghost-btn" id="addRateRowBtn" style="margin-top:6px;">+ Add another rate</button>
+      </div>
+      <button class="close-modal" id="saveCodeBtn">Save</button>
+      <button class="ghost-btn danger" id="deleteCodeBtn" style="margin-top:8px; display:none;">Delete Cornice</button>
+      <button class="ghost-btn" id="cancelCodeBtn" style="margin-top:8px;">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <h2>Pay Settings</h2>
+      <div class="settings-row">
+        <label>Hourly Rate ($)</label>
+        <input type="number" id="setHourly" inputmode="decimal">
+      </div>
+      <div class="settings-row">
+        <label>Base Hours / Week</label>
+        <input type="number" id="setHours" inputmode="decimal">
+      </div>
+      <div class="settings-row">
+        <label>Base Units Covered</label>
+        <input type="number" id="setBaseUnits" inputmode="decimal">
+      </div>
+      <div class="settings-row">
+        <label>Extra Rate ($ / unit)</label>
+        <input type="number" id="setExtraRate" inputmode="decimal">
+      </div>
+      <button class="close-modal" id="saveSettingsBtn">Save</button>
+    </div>
+  </div>
+
+<script>
+// ---------- Rate table ----------
+// Default rate table, grouped into the same series/sections as the original sheet.
+// This seeds storage on first run; after that, the user's edited copy (with any
+// added/renamed/deleted categories and codes) is what's loaded and used.
+const DEFAULT_CATEGORIES = {"P Series":{"P1-6":[1.25],"P11-3.9":[1.5],"P12-3.9":[1.75],"P13-4.2":[1.75],"P14-4.2":[1.75],"P15-3.9":[1.5],"P16-4.2":[1.75]},"W Series":{"W015-4.2":[1.25],"W020-4.2":[1.25],"W104-4.2":[1.5],"W106-4.2":[1.5],"W107-4.2":[1.5],"W110-4.2":[1.5],"W111-4.2":[1.5],"W112-4.2":[1.5],"W115-4.2":[1.5]},"200 Series":{"202-4.2":[1.25],"212-3.6":[1.2],"220":[1.1],"221":[1.0],"223-4.2":[1.5],"225":[1.3],"227":[1.25],"230":[2.0],"231":[1.25],"233":[1.5],"236":[1.25],"237":[1.5],"239":[1.5],"240":[1.25],"242":[0.8],"245":[1.2],"250":[1.4],"252":[1.5],"258":[3.0],"289-3.6":[1.5],"290":[1.25]},"300 Series":{"317-4.2":[1.6],"318":[2.3],"319":[2.25],"321":[1.5],"323":[1.25],"365":[1.0],"366":[1.0],"366A":[1.11],"367":[1.0],"368":[1.0],"371":[0.8],"392":[1.2]},"400 Series":{"404":[1.5],"406":[1.5,1.75],"422":[1.25],"424":[1.25],"425":[1.25],"427":[1.25],"428":[1.15],"429":[1.0],"429A":[1.5],"439":[1.0],"440":[1.5],"441":[1.0],"442":[0.75],"445":[1.25],"448":[1.5],"450":[1.25],"464":[1.5],"469-4.4":[1.6],"482":[2.0],"483":[2.0],"484":[1.25],"485":[1.8],"488":[1.75],"489":[1.5],"490A":[1.11],"491":[1.2,2.0],"492":[1.1],"494-4.2":[1.5],"495":[1.0]},"500 Series":{"512":[1.0],"513":[1.0],"519":[1.45],"521":[1.25],"524":[1.5],"526":[1.25,1.26],"527":[1.5],"531":[1.25],"533":[1.4],"536":[1.25],"537":[1.25],"539":[1.11],"540-4.2":[1.2],"546":[1.25],"549":[1.25],"559":[1.5],"565":[3.0],"567":[2.5],"574-4.2":[1.5],"575-4.2":[1.5],"576":[1.0],"577":[1.0],"578":[1.5],"580":[1.2],"585":[1.2],"585A":[1.5],"586":[1.0],"587":[1.1],"588":[1.2],"590":[1.0],"591":[1.25],"592":[1.1],"593":[1.3],"596":[1.75],"597":[1.75],"598-4.2":[2.4],"599":[2.5]},"600 Series":{"607":[2.0],"607A":[2.0],"612":[1.7],"613":[1.3],"614":[1.25],"616":[0.75],"617-4.2":[1.5],"618":[1.5],"621":[1.0],"624":[1.0],"627":[1.0],"628":[1.0],"629":[1.0],"630":[1.2],"631":[1.25],"632":[1.0],"633":[1.5],"634":[1.0],"635":[1.1],"636":[1.0],"639":[1.0],"640":[1.0],"641":[1.0],"642":[1.0],"647":[1.1],"648":[0.75],"649":[1.0],"650":[1.0],"651":[6.5],"653":[1.0],"654":[4.0],"655":[2.0],"656":[1.5],"661":[4.0],"662":[2.0],"671":[1.4],"672":[1.25],"673":[1.25],"676":[1.25],"676A":[2.25],"677":[4.5],"678-4.2":[2.75],"679":[1.5],"680":[1.1],"681":[1.25],"682":[1.0,1.25],"685":[2.5],"686":[7.0,12.0],"687":[1.75],"688":[1.4],"689":[1.3],"690":[1.2],"691":[3.0],"692":[1.0],"693-4.2":[2.0],"694-4.2":[1.5],"695-4.2":[1.25],"696":[9.0],"696A":[2.5],"697":[1.25],"698":[1.0],"699":[2.25]},"700 Series":{"700":[5.0],"701":[1.7],"703":[2.5],"703A":[1.75],"705":[1.75],"705L":[2.5],"706":[1.5],"707":[1.75],"708":[2.0],"709":[1.75,1.9],"710":[4.0],"711":[1.5],"712":[1.25],"713":[1.75],"714":[1.75],"715":[1.25],"715-4.2":[1.4],"716-4.2":[2.25],"716-3.6":[2.0],"717":[2.5],"718":[1.2],"720":[4.0],"721":[2.5],"721B":[2.5],"723-4.2":[2.0],"724":[1.5],"727-4.2":[3.0],"727-3.6":[2.5],"729":[1.25],"744":[1.43],"745":[1.75],"747":[1.11],"748":[1.1]},"800 Series":{"830":[1.1],"869":[1.0],"871":[1.0],"878":[1.0],"887":[1.0],"888":[1.0]},"900 Series":{"900":[5.0],"901":[3.0],"902":[1.5],"903":[4.0],"904":[2.5,2.75],"904S":[1.2,1.3],"905":[1.5],"906":[2.0],"908":[1.5],"909":[2.0,2.5],"910":[2.5],"917-4.2":[3.0],"918":[1.8],"919":[1.3],"920":[1.5],"920S":[1.3],"921":[2.0],"922":[6.0],"923":[3.0],"924":[2.5],"925":[3.0],"927":[2.0],"928":[1.5],"929":[4.0],"930":[2.5],"931":[3.5],"932":[4.0],"950L":[2.5],"951S":[2.0],"953":[10.0,12.0],"954":[2.75,2.5],"956":[3.5],"957":[2.0],"958":[1.75],"959":[1.5],"960":[1.5]},"Specials":{"CH102-4.2":[1.5],"CH103-4.2":[2.0],"HAWK-4.2":[1.5],"KNUCKLE-254":[1.75],"VIC120":[1.5],"OVOLO":[2.5],"HEART":[1.5],"PAS":[1.75],"PAL":[2.0],"SPCORBMLD":[3.0],"ESJAYA":[2.7],"ESJAYB":[2.0],"ESJAYC":[1.5],"C118":[1.2],"H":[2.5],"D":[3.5],"HP2227":[2.75],"KVM":[3.75],"DOM":[3.0],"C1":[3.0],"C2":[2.25],"M1":[2.25],"A1":[2.3],"CONERTO":[2.25]}};
+
+// Live rate categories — array of {name, codes:{CODE:[rates]}} — loaded from storage,
+// falling back to DEFAULT_CATEGORIES on first run. This is the editable source of truth.
+let categories = [];
+
+// Flat lookup cache rebuilt from `categories` whenever it changes.
+let RATES = {};
+let RATE_KEYS = [];
+function rebuildFlatRates(){
+  RATES = {};
+  categories.forEach(cat => {
+    Object.entries(cat.codes).forEach(([code, rates]) => { RATES[code] = rates; });
+  });
+  RATE_KEYS = Object.keys(RATES);
+}
+function categoryOfCode(code){
+  const cat = categories.find(c => c.codes.hasOwnProperty(code));
+  return cat ? cat.name : null;
+}
+
+function normalizeCode(raw){
+  return raw.trim().toUpperCase().replace(/\s+/g,'').replace(/["“”]/g,'');
+}
+// Returns the array of known rates for a code, or null if code isn't on the sheet.
+function lookupRates(raw){
+  const norm = normalizeCode(raw);
+  if(RATES.hasOwnProperty(norm)) return RATES[norm];
+  return null;
+}
+
+async function loadRateTable(){
+  try{
+    const r = await window.storage.get('rateTable', false);
+    if(r && r.value){
+      categories = JSON.parse(r.value);
+      rebuildFlatRates();
+      return;
+    }
+  }catch(e){}
+  // first run — seed from defaults
+  categories = Object.entries(DEFAULT_CATEGORIES).map(([name, codes]) => ({ name, codes }));
+  rebuildFlatRates();
+  await saveRateTable();
+}
+async function saveRateTable(){
+  try{
+    await window.storage.set('rateTable', JSON.stringify(categories), false);
+  }catch(e){ toast('Could not save rate book'); }
+  rebuildFlatRates();
+}
+
+// ---------- State ----------
+// Pay week runs Wed → Tue, all 7 days selectable.
+const DAYS = ['Wed','Thu','Fri','Sat','Sun','Mon','Tue'];
+let state = {
+  weekStart: null,        // ISO date string for the Wednesday that starts this pay week
+  entries: [],            // {id, day, code, qty, rate}
+  settings: { hourly:28.5, hours:40, baseUnits:180, extraRate:3.8 }
+};
+let activeDay = 'Wed';
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 1600);
+}
+
+// Finds the Wednesday that starts the pay-period containing date `d`.
+function wednesdayOf(d){
+  const dt = new Date(d);
+  const day = dt.getDay(); // Sun=0 ... Sat=6
+  const offset = (day - 3 + 7) % 7; // days since most recent Wednesday
+  dt.setDate(dt.getDate() - offset);
+  dt.setHours(0,0,0,0);
+  return dt;
+}
+function fmtDate(dt){
+  return dt.toLocaleDateString('en-AU', { day:'numeric', month:'short' });
+}
+function isoDate(dt){ return dt.toISOString().slice(0,10); }
+function addDays(iso, n){
+  const dt = new Date(iso);
+  dt.setDate(dt.getDate() + n);
+  return isoDate(dt);
+}
+
+async function loadSettings(){
+  try{
+    const s = await window.storage.get('settings', false);
+    if(s && s.value) state.settings = JSON.parse(s.value);
+  }catch(e){}
+}
+
+// Loads a specific week (by its Wednesday ISO date) from storage into state.
+async function loadWeek(weekStartIso){
+  state.weekStart = weekStartIso;
+  try{
+    const w = await window.storage.get('week:' + weekStartIso, false);
+    state.entries = (w && w.value) ? JSON.parse(w.value) : [];
+  }catch(e){
+    state.entries = [];
+  }
+}
+
+async function loadState(){
+  await loadSettings();
+  const thisWeekStart = isoDate(wednesdayOf(new Date()));
+  await loadWeek(thisWeekStart);
+}
+
+async function saveState(){
+  try{
+    await window.storage.set('week:' + state.weekStart, JSON.stringify(state.entries), false);
+  }catch(e){ toast('Save failed — check connection'); }
+}
+
+async function saveSettings(){
+  try{
+    await window.storage.set('settings', JSON.stringify(state.settings), false);
+  }catch(e){ toast('Save failed'); }
+}
+
+async function goToWeek(weekStartIso){
+  await loadWeek(weekStartIso);
+  render();
+}
+async function prevWeek(){ await goToWeek(addDays(state.weekStart, -7)); }
+async function nextWeek(){ await goToWeek(addDays(state.weekStart, 7)); }
+async function jumpToCurrentWeek(){ await goToWeek(isoDate(wednesdayOf(new Date()))); }
+
+// ---------- Rendering ----------
+function render(){
+  renderWeekLabel();
+  renderDayChips();
+  renderEntryForm();
+  renderDayLedger();
+  renderWeekTable();
+  renderSummary();
+}
+
+function renderWeekLabel(){
+  const start = new Date(state.weekStart);
+  const end = new Date(start); end.setDate(start.getDate()+6);
+  const isCurrent = state.weekStart === isoDate(wednesdayOf(new Date()));
+  document.getElementById('weekLabel').textContent =
+    `Week of ${fmtDate(start)} – ${fmtDate(end)}` + (isCurrent ? ' (current)' : '');
+}
+
+function renderDayChips(){
+  const row = document.getElementById('dayRow');
+  row.innerHTML = '';
+  const start = new Date(state.weekStart);
+  DAYS.forEach((d, i) => {
+    const dt = new Date(start); dt.setDate(start.getDate()+i);
+    const hasEntries = state.entries.some(e => e.day === d);
+    const chip = document.createElement('div');
+    chip.className = 'day-chip' + (d===activeDay ? ' active':'') + (hasEntries ? ' has-entries':'');
+    chip.innerHTML = `${d}<span style="display:block;font-size:9px;opacity:0.7;">${dt.getDate()}</span><span class="dot"></span>`;
+    chip.onclick = () => { activeDay = d; render(); };
+    row.appendChild(chip);
+  });
+  document.getElementById('activeDayName').textContent = activeDay;
+}
+
+function renderEntryForm(){
+  document.getElementById('activeDayName').textContent = activeDay;
+}
+
+function unitsFor(e){ return Math.round(e.qty * e.rate * 100)/100; }
+
+function renderDayLedger(){
+  const ledger = document.getElementById('dayLedger');
+  const dayEntries = state.entries.filter(e => e.day === activeDay);
+  document.getElementById('entryCount').textContent = dayEntries.length ? `(${dayEntries.length} entries)` : '';
+  ledger.innerHTML = '';
+  if(dayEntries.length === 0){
+    ledger.innerHTML = '<div class="empty-note">No entries yet for ' + activeDay + '.</div>';
+  } else {
+    dayEntries.forEach(e => {
+      const row = document.createElement('div');
+      row.className = 'ledger-row';
+      row.innerHTML = `
+        <span class="lcode">${e.code}</span>
+        <span class="lmeta">${e.qty} × ${e.rate}u</span>
+        <span class="lunits">${unitsFor(e)}</span>
+        <button class="del-btn" data-id="${e.id}">✕</button>
+      `;
+      row.querySelector('.del-btn').onclick = () => removeEntry(e.id);
+      ledger.appendChild(row);
+    });
+  }
+  const dayTotal = dayEntries.reduce((s,e)=>s+unitsFor(e),0);
+  const totalLine = document.getElementById('dayTotalLine');
+  if(dayEntries.length){
+    totalLine.style.display = 'flex';
+    totalLine.innerHTML = `<span>${activeDay} Total</span><b>${round2(dayTotal)} units</b>`;
+  } else {
+    totalLine.style.display = 'none';
+  }
+}
+
+function renderWeekTable(){
+  const body = document.getElementById('weekTableBody');
+  body.innerHTML = '';
+  let weekTotal = 0;
+  DAYS.forEach(d => {
+    const dayEntries = state.entries.filter(e => e.day === d);
+    const total = dayEntries.reduce((s,e)=>s+unitsFor(e),0);
+    weekTotal += total;
+    const tr = document.createElement('tr');
+    if(d === activeDay) tr.className = 'active-day';
+    tr.innerHTML = `<td>${d}</td><td>${dayEntries.length}</td><td>${dayEntries.length ? round2(total) : '—'}</td>`;
+    body.appendChild(tr);
+  });
+  const trTotal = document.createElement('tr');
+  trTotal.style.borderTop = '1px solid var(--line)';
+  trTotal.innerHTML = `<td style="padding-top:10px;color:var(--amber);font-weight:600;">WEEK</td><td style="padding-top:10px;"></td><td style="padding-top:10px;color:var(--amber);font-weight:600;">${round2(weekTotal)}</td>`;
+  body.appendChild(trTotal);
+}
+
+function round2(n){ return Math.round(n*100)/100; }
+
+function renderSummary(){
+  const totalUnits = state.entries.reduce((s,e)=>s+unitsFor(e),0);
+  const { hourly, hours, baseUnits, extraRate } = state.settings;
+  const basePay = hourly * hours;
+  const remaining = Math.max(0, round2(totalUnits - baseUnits));
+  const extraPay = remaining * extraRate;
+  const total = basePay + extraPay;
+
+  document.getElementById('sumUnits').textContent = round2(totalUnits);
+  document.getElementById('sumHoursLbl').textContent = hours;
+  document.getElementById('sumRateLbl').textContent = hourly.toFixed(2);
+  document.getElementById('sumBase').textContent = '$' + basePay.toFixed(2);
+  document.getElementById('sumBaseUnits').textContent = baseUnits;
+  document.getElementById('sumRemUnits').textContent = remaining;
+  document.getElementById('sumExtraRateLbl').textContent = extraRate.toFixed(2);
+  document.getElementById('sumExtra').textContent = '$' + extraPay.toFixed(2);
+  document.getElementById('sumTotal').textContent = '$' + total.toFixed(2);
+}
+
+// ---------- Entry form logic ----------
+const codeInput = document.getElementById('codeInput');
+const qtyInput = document.getElementById('qtyInput');
+const rateInput = document.getElementById('rateInput');
+const rateHint = document.getElementById('rateHint');
+const suggestions = document.getElementById('suggestions');
+const variantChips = document.getElementById('variantChips');
+const addBtn = document.getElementById('addBtn');
+
+// When a code has multiple known rates, show tap-to-pick chips and auto-fill the first.
+// When it has one, auto-fill and hide chips. When unknown, clear chips — user just types a rate.
+function updateForCode(){
+  const val = codeInput.value.trim();
+  variantChips.style.display = 'none';
+  variantChips.innerHTML = '';
+  if(!val){ rateHint.textContent=''; return; }
+  const rates = lookupRates(val);
+  if(rates === null){
+    rateHint.textContent = 'custom';
+    rateHint.classList.add('unknown');
+    return;
+  }
+  rateHint.classList.remove('unknown');
+  if(rates.length === 1){
+    rateHint.textContent = rates[0] + ' u';
+    rateInput.value = rates[0];
+  } else {
+    rateHint.textContent = rates.length + ' moulds';
+    rateInput.value = rates[0];
+    variantChips.style.display = 'flex';
+    rates.forEach((r, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'variant-chip' + (i===0 ? ' sel':'');
+      chip.textContent = 'Mould ' + String.fromCharCode(65+i) + ' · ' + r + 'u';
+      chip.onclick = () => {
+        rateInput.value = r;
+        [...variantChips.children].forEach(c => c.classList.remove('sel'));
+        chip.classList.add('sel');
+      };
+      variantChips.appendChild(chip);
+    });
+  }
+}
+
+function updateSuggestions(){
+  const val = normalizeCode(codeInput.value || '');
+  suggestions.innerHTML = '';
+  if(!val){ suggestions.classList.remove('open'); return; }
+  const matches = RATE_KEYS.filter(k => k.startsWith(val)).slice(0, 8);
+  if(matches.length === 0 || (matches.length===1 && matches[0]===val)){
+    suggestions.classList.remove('open');
+    return;
+  }
+  matches.forEach(k => {
+    const item = document.createElement('div');
+    item.className = 'suggestion-item';
+    const rateLabel = RATES[k].length > 1 ? RATES[k].map(r=>r+'u').join(' / ') : RATES[k][0]+'u';
+    item.innerHTML = `<span>${k}</span><span class="r">${rateLabel}</span>`;
+    item.onclick = () => {
+      codeInput.value = k;
+      suggestions.classList.remove('open');
+      updateForCode();
+      qtyInput.focus();
+    };
+    suggestions.appendChild(item);
+  });
+  suggestions.classList.add('open');
+}
+
+codeInput.addEventListener('input', () => { updateForCode(); updateSuggestions(); });
+codeInput.addEventListener('blur', () => setTimeout(()=>suggestions.classList.remove('open'), 150));
+codeInput.addEventListener('focus', updateSuggestions);
+
+async function addEntry(){
+  const codeRaw = codeInput.value.trim();
+  const qty = parseFloat(qtyInput.value);
+  const rate = parseFloat(rateInput.value);
+  if(!codeRaw){ toast('Enter a cornice code'); return; }
+  if(!qty || qty <= 0){ toast('Enter a valid quantity'); return; }
+  if(!rate || rate <= 0){ toast('Enter a units-per-length rate'); return; }
+  const entry = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+    day: activeDay,
+    code: normalizeCode(codeRaw),
+    qty, rate
+  };
+  state.entries.push(entry);
+  await saveState();
+  codeInput.value = '';
+  qtyInput.value = '';
+  rateInput.value = '';
+  rateHint.textContent = '';
+  variantChips.style.display = 'none';
+  render();
+  codeInput.focus();
+}
+addBtn.onclick = addEntry;
+qtyInput.addEventListener('keydown', e => { if(e.key === 'Enter') rateInput.focus(); });
+rateInput.addEventListener('keydown', e => { if(e.key === 'Enter') addEntry(); });
+codeInput.addEventListener('keydown', e => { if(e.key === 'Enter'){ suggestions.classList.remove('open'); qtyInput.focus(); }});
+
+async function removeEntry(id){
+  state.entries = state.entries.filter(e => e.id !== id);
+  await saveState();
+  render();
+}
+
+// ---------- Footer actions ----------
+document.getElementById('thisWeekBtn').onclick = async () => {
+  await jumpToCurrentWeek();
+  toast('Jumped to current week');
+};
+
+document.getElementById('clearDayBtn').onclick = async () => {
+  if(!confirm('Clear all entries for ' + activeDay + '?')) return;
+  state.entries = state.entries.filter(e => e.day !== activeDay);
+  await saveState();
+  render();
+};
+
+// ---------- Settings modal ----------
+const modalOverlay = document.getElementById('modalOverlay');
+document.getElementById('settingsBtn').onclick = () => {
+  document.getElementById('setHourly').value = state.settings.hourly;
+  document.getElementById('setHours').value = state.settings.hours;
+  document.getElementById('setBaseUnits').value = state.settings.baseUnits;
+  document.getElementById('setExtraRate').value = state.settings.extraRate;
+  modalOverlay.classList.add('open');
+};
+modalOverlay.addEventListener('click', e => { if(e.target === modalOverlay) modalOverlay.classList.remove('open'); });
+document.getElementById('saveSettingsBtn').onclick = async () => {
+  state.settings = {
+    hourly: parseFloat(document.getElementById('setHourly').value) || 0,
+    hours: parseFloat(document.getElementById('setHours').value) || 0,
+    baseUnits: parseFloat(document.getElementById('setBaseUnits').value) || 0,
+    extraRate: parseFloat(document.getElementById('setExtraRate').value) || 0
+  };
+  await saveSettings();
+  modalOverlay.classList.remove('open');
+  render();
+  toast('Settings saved');
+};
+
+// ---------- Rate Book (manage categories & codes) ----------
+let openCats = new Set(['700 Series','900 Series']); // a couple open by default
+let editingCode = null;      // code string being edited, or null when adding new
+let editingOrigCategory = null;
+let rateSearch = '';
+
+const ratesOverlay = document.getElementById('ratesOverlay');
+document.getElementById('rateBookBtn').onclick = () => {
+  ratesOverlay.classList.add('open');
+  renderCategoryList();
+};
+document.getElementById('ratesCloseBtn').onclick = () => {
+  ratesOverlay.classList.remove('open');
+  render(); // rates may have changed — refresh main screen (rate hints etc.)
+};
+
+document.getElementById('rateSearchInput').addEventListener('input', (e) => {
+  rateSearch = normalizeCode(e.target.value || '');
+  if(rateSearch){ openCats = new Set(categories.map(c=>c.name)); } // auto-expand while searching
+  renderCategoryList();
+});
+
+function renderCategoryList(){
+  const list = document.getElementById('categoryList');
+  list.innerHTML = '';
+  categories.forEach(cat => {
+    const codeEntries = Object.entries(cat.codes)
+      .filter(([code]) => !rateSearch || code.includes(rateSearch))
+      .sort((a,b) => a[0].localeCompare(b[0]));
+    if(rateSearch && codeEntries.length === 0) return; // hide empty sections while searching
+
+    const block = document.createElement('div');
+    block.className = 'cat-block' + (openCats.has(cat.name) ? ' open' : '');
+
+    const head = document.createElement('div');
+    head.className = 'cat-head';
+    head.innerHTML = `
+      <div class="cat-head-left">
+        <span class="cat-chevron">▸</span>
+        <span class="cat-name">${escapeHtml(cat.name)}</span>
+        <span class="cat-count">(${Object.keys(cat.codes).length})</span>
+      </div>
+      <div class="cat-actions">
+        <button class="icon-btn" data-act="rename">✎</button>
+        <button class="icon-btn" data-act="del">🗑</button>
+      </div>
+    `;
+    head.querySelector('.cat-head-left').onclick = () => {
+      if(openCats.has(cat.name)) openCats.delete(cat.name); else openCats.add(cat.name);
+      renderCategoryList();
+    };
+    head.querySelector('[data-act="rename"]').onclick = (e) => { e.stopPropagation(); renameCategory(cat.name); };
+    head.querySelector('[data-act="del"]').onclick = (e) => { e.stopPropagation(); deleteCategory(cat.name); };
+    block.appendChild(head);
+
+    const codesWrap = document.createElement('div');
+    codesWrap.className = 'cat-codes';
+    if(codeEntries.length === 0){
+      codesWrap.innerHTML = '<div class="empty-note">No cornices in this section yet.</div>';
+    } else {
+      codeEntries.forEach(([code, rates]) => {
+        const row = document.createElement('div');
+        row.className = 'code-row';
+        const rateLabel = rates.map(r => r+'u').join(' / ');
+        row.innerHTML = `
+          <span class="cname">${escapeHtml(code)}</span>
+          <span class="crates">${rateLabel}</span>
+          <button class="icon-btn" data-edit="${escapeHtml(code)}">✎</button>
+        `;
+        row.querySelector('[data-edit]').onclick = () => openCodeModal(code, cat.name);
+        codesWrap.appendChild(row);
+      });
+    }
+    const addRow = document.createElement('div');
+    addRow.className = 'add-code-row';
+    addRow.innerHTML = `<button>+ Add Cornice to ${escapeHtml(cat.name)}</button>`;
+    addRow.querySelector('button').onclick = () => openCodeModal(null, cat.name);
+    codesWrap.appendChild(addRow);
+
+    block.appendChild(codesWrap);
+    list.appendChild(block);
+  });
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('addCategoryBtn').onclick = async () => {
+  const name = prompt('New section name (e.g. "Archway Series")');
+  if(!name || !name.trim()) return;
+  const trimmed = name.trim();
+  if(categories.some(c => c.name.toLowerCase() === trimmed.toLowerCase())){
+    toast('A section with that name already exists');
+    return;
+  }
+  categories.push({ name: trimmed, codes: {} });
+  openCats.add(trimmed);
+  await saveRateTable();
+  renderCategoryList();
+  toast('Section added');
+};
+
+async function renameCategory(oldName){
+  const name = prompt('Rename section', oldName);
+  if(!name || !name.trim() || name.trim() === oldName) return;
+  const trimmed = name.trim();
+  if(categories.some(c => c.name.toLowerCase() === trimmed.toLowerCase())){
+    toast('A section with that name already exists');
+    return;
+  }
+  const cat = categories.find(c => c.name === oldName);
+  cat.name = trimmed;
+  if(openCats.has(oldName)){ openCats.delete(oldName); openCats.add(trimmed); }
+  await saveRateTable();
+  renderCategoryList();
+};
+
+async function deleteCategory(name){
+  const cat = categories.find(c => c.name === name);
+  const codeCount = cat ? Object.keys(cat.codes).length : 0;
+  const msg = codeCount > 0
+    ? `Delete "${name}"? Its ${codeCount} cornice code(s) will be moved to "Uncategorized".`
+    : `Delete empty section "${name}"?`;
+  if(!confirm(msg)) return;
+  if(codeCount > 0){
+    let uncat = categories.find(c => c.name === 'Uncategorized');
+    if(!uncat){ uncat = { name:'Uncategorized', codes:{} }; categories.push(uncat); }
+    Object.entries(cat.codes).forEach(([code, rates]) => { uncat.codes[code] = rates; });
+  }
+  categories = categories.filter(c => c.name !== name);
+  await saveRateTable();
+  renderCategoryList();
+  toast('Section deleted');
+}
+
+// ---- Add/edit code modal ----
+const codeModalOverlay = document.getElementById('codeModalOverlay');
+const editCategorySelect = document.getElementById('editCategory');
+const editRatesList = document.getElementById('editRatesList');
+const editCodeInput = document.getElementById('editCode');
+
+function populateCategorySelect(selected){
+  editCategorySelect.innerHTML = categories.map(c =>
+    `<option value="${escapeHtml(c.name)}" ${c.name===selected?'selected':''}>${escapeHtml(c.name)}</option>`
+  ).join('');
+}
+
+function addRateRow(value=''){
+  const row = document.createElement('div');
+  row.className = 'rate-row-item';
+  row.innerHTML = `
+    <input type="number" step="0.01" inputmode="decimal" placeholder="Units" value="${value}">
+    <button class="icon-btn" title="Remove">✕</button>
+  `;
+  row.querySelector('.icon-btn').onclick = () => {
+    if(editRatesList.children.length > 1) row.remove();
+  };
+  editRatesList.appendChild(row);
+}
+
+function openCodeModal(code, categoryName){
+  editingCode = code;
+  editingOrigCategory = categoryName;
+  document.getElementById('codeModalTitle').textContent = code ? 'Edit Cornice' : 'Add Cornice';
+  editCodeInput.value = code || '';
+  populateCategorySelect(categoryName);
+  editRatesList.innerHTML = '';
+  if(code){
+    const rates = RATES[code] || [1];
+    rates.forEach(r => addRateRow(r));
+  } else {
+    addRateRow('');
+  }
+  document.getElementById('deleteCodeBtn').style.display = code ? 'block' : 'none';
+  codeModalOverlay.classList.add('open');
+}
+
+document.getElementById('addRateRowBtn').onclick = () => addRateRow('');
+document.getElementById('cancelCodeBtn').onclick = () => codeModalOverlay.classList.remove('open');
+codeModalOverlay.addEventListener('click', e => { if(e.target === codeModalOverlay) codeModalOverlay.classList.remove('open'); });
+
+document.getElementById('saveCodeBtn').onclick = async () => {
+  const newCode = normalizeCode(editCodeInput.value || '');
+  const targetCat = editCategorySelect.value;
+  const rateInputs = [...editRatesList.querySelectorAll('input')];
+  const rates = rateInputs.map(i => parseFloat(i.value)).filter(v => !isNaN(v) && v > 0);
+
+  if(!newCode){ toast('Enter a code'); return; }
+  if(rates.length === 0){ toast('Enter at least one valid rate'); return; }
+  if(!targetCat){ toast('Choose a section'); return; }
+
+  // if code exists elsewhere (different code string than we're editing), block/overwrite
+  const existingOwner = categoryOfCode(newCode);
+  if(existingOwner && !(editingCode && newCode === editingCode)){
+    if(!confirm(`"${newCode}" already exists in "${existingOwner}". Overwrite it there and move to "${targetCat}"?`)) return;
+    const ownerCat = categories.find(c => c.name === existingOwner);
+    delete ownerCat.codes[newCode];
+  }
+
+  // remove old entry if renaming or moving category
+  if(editingCode){
+    const origCat = categories.find(c => c.name === editingOrigCategory);
+    if(origCat) delete origCat.codes[editingCode];
+  }
+
+  const cat = categories.find(c => c.name === targetCat);
+  cat.codes[newCode] = rates;
+
+  await saveRateTable();
+  codeModalOverlay.classList.remove('open');
+  renderCategoryList();
+  toast(editingCode ? 'Cornice updated' : 'Cornice added');
+};
+
+document.getElementById('deleteCodeBtn').onclick = async () => {
+  if(!editingCode) return;
+  if(!confirm(`Delete "${editingCode}" from the rate book?`)) return;
+  const cat = categories.find(c => c.name === editingOrigCategory);
+  if(cat) delete cat.codes[editingCode];
+  await saveRateTable();
+  codeModalOverlay.classList.remove('open');
+  renderCategoryList();
+  toast('Cornice deleted');
+};
+
+// ---------- Init ----------
+document.getElementById('prevWeekBtn').onclick = prevWeek;
+document.getElementById('nextWeekBtn').onclick = nextWeek;
+
+(async function init(){
+  await loadRateTable();
+  await loadState();
+  activeDay = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date().getDay()];
+  render();
+})();
+</script>
+</body>
+</html>
