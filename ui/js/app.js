@@ -27,6 +27,11 @@ const state = {
   selectedCorniceStock: null,
   selectedMould: null,
   corniceRateMatches: [],
+  // Session management
+  sessionUser: null,
+  sessionRole: null,
+  sessionLocked: false,
+  idleTimer: null,
 };
 
 const permissionLabels = {
@@ -83,26 +88,141 @@ function renderHome() {
 }
 
 let clockTimer = null;
+let sessionTimer = null;
 function tickClock() {
   if (clockTimer) clearInterval(clockTimer);
-  const timeNode = app.querySelector("[data-time]");
-  const dateNode = app.querySelector("[data-date]");
+  const timeNode = app.querySelector("[data-time]") || app.querySelector("[data-lock-time]");
+  const dateNode = app.querySelector("[data-date]") || app.querySelector("[data-lock-date]");
   const update = () => {
     const now = new Date();
-    timeNode.textContent = now.toLocaleTimeString("en-AU", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-    const day = now.toLocaleDateString("en-AU", { weekday: "long" });
-    const dd = String(now.getDate()).padStart(2, "0");
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    dateNode.textContent = `${dd}/${mm}/${now.getFullYear()} ${day}`;
+    if (timeNode) {
+      timeNode.textContent = now.toLocaleTimeString("en-AU", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+    }
+    if (dateNode) {
+      const day = now.toLocaleDateString("en-AU", { weekday: "long" });
+      const dd = String(now.getDate()).padStart(2, "0");
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      dateNode.textContent = `${dd}/${mm}/${now.getFullYear()} ${day}`;
+    }
   };
   update();
   clockTimer = setInterval(update, 1000);
 }
+
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+
+function resetIdleTimer() {
+  if (state.idleTimer) clearTimeout(state.idleTimer);
+  if (!state.sessionUser || state.sessionLocked) return;
+  state.lastActivity = Date.now();
+  state.idleTimer = setTimeout(() => {
+    state.sessionLocked = true;
+    renderLockScreen();
+  }, IDLE_TIMEOUT_MS);
+}
+
+function stopIdleTimer() {
+  if (state.idleTimer) {
+    clearTimeout(state.idleTimer);
+    state.idleTimer = null;
+  }
+}
+
+function startSessionTimer() {
+  if (sessionTimer) clearInterval(sessionTimer);
+  sessionTimer = setInterval(() => {
+    const pill = app.querySelector("[data-status-pill]");
+    if (!pill || !state.sessionUser || state.sessionLocked || !state.lastActivity) return;
+    const elapsed = Date.now() - state.lastActivity;
+    const remaining = Math.max(0, IDLE_TIMEOUT_MS - elapsed);
+    const mins = Math.floor(remaining / 60000);
+    const secs = Math.floor((remaining % 60000) / 1000);
+    const timeStr = `${mins}:${String(secs).padStart(2, "0")}`;
+    pill.dataset.remaining = timeStr;
+    const remainingEl = app.querySelector("[data-session-remaining]");
+    if (remainingEl) remainingEl.textContent = `· ${timeStr}`;
+  }, 1000);
+}
+
+function stopSessionTimer() {
+  if (sessionTimer) {
+    clearInterval(sessionTimer);
+    sessionTimer = null;
+  }
+}
+
+function startSession(user, role) {
+  state.sessionUser = user;
+  state.sessionRole = role;
+  state.sessionLocked = false;
+  resetIdleTimer();
+  startSessionTimer();
+}
+
+function endSession() {
+  state.sessionUser = null;
+  state.sessionRole = null;
+  state.sessionLocked = false;
+  stopIdleTimer();
+  stopSessionTimer();
+}
+
+function renderLockScreen() {
+  stopIdleTimer();
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  const day = now.toLocaleDateString("en-AU", { weekday: "long" });
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dateStr = `${dd}/${mm}/${now.getFullYear()} ${day}`;
+
+  app.innerHTML = `
+    <div class="lock-overlay" data-unlock-tap>
+      <div class="clock-face">
+        <div class="clock-time" data-lock-time>${timeStr}</div>
+        <div class="clock-date" data-lock-date>${dateStr}</div>
+      </div>
+      <div class="lock-prompt">Tap anywhere to unlock</div>
+    </div>
+  `;
+
+  tickClock();
+
+  app.querySelector("[data-unlock-tap]").addEventListener("click", async () => {
+    if (!state.sessionUser) {
+      renderHome();
+      return;
+    }
+    app.innerHTML = "";
+    try {
+      const requireAdmin = state.sessionRole === "admin";
+      const response = await requestAuth({
+        title: "Unlock",
+        requireAdmin,
+        employee: state.sessionUser,
+      });
+      state.sessionLocked = false;
+      if (state.sessionRole === "admin") {
+        state.admin = response.employee;
+        renderAdmin();
+      } else {
+        state.currentStaff = response.employee;
+        renderStaffDashboard();
+      }
+    } catch {
+      renderLockScreen();
+    }
+  });
+}
+
+document.addEventListener("click", resetIdleTimer);
+document.addEventListener("keydown", resetIdleTimer);
+document.addEventListener("touchstart", resetIdleTimer, { passive: true });
 
 lockKioskKeys();
 loadStatus();
@@ -129,6 +249,7 @@ async function openAdmin() {
   try {
     const response = await requestAuth({ title: "Admin", requireAdmin: true });
     state.admin = response.employee;
+    startSession(response.employee, "admin");
     state.adminView = "alerts";
     renderAdmin();
   } catch {
@@ -169,6 +290,7 @@ async function renderStaffPicker() {
       try {
         const response = await requestAuth({ title: "Staff", requireAdmin: false, employee });
         state.currentStaff = response.employee;
+        startSession(response.employee, "staff");
         state.staffView = "clock";
         renderStaffDashboard();
       } catch {
@@ -199,7 +321,7 @@ function renderAdmin() {
     tabs,
     state.adminView,
   );
-  app.querySelector("[data-back]").addEventListener("click", renderRoleMenu);
+  app.querySelector("[data-back]").addEventListener("click", () => { endSession(); renderHome(); });
   app.querySelectorAll("[data-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       state.adminView = button.dataset.tab;
@@ -291,7 +413,6 @@ async function renderEmployeesPanel() {
         </div>
         <div class="wide panel-actions">
           <button class="primary" type="submit">Save Employee</button>
-          <button class="warning" type="button" data-enroll>Enroll Fingerprint</button>
         </div>
       </form>
       ${table(
@@ -340,23 +461,6 @@ async function renderEmployeesPanel() {
       },
     });
     renderEmployeesPanel();
-  });
-  app.querySelector("[data-enroll]").addEventListener("click", async (event) => {
-    setBusy(event.currentTarget);
-    try {
-      const form = new FormData(app.querySelector("[data-employee-form]"));
-      const response = await invoke("enroll_fingerprint", {
-        employeeId: form.get("id"),
-        finger: form.get("finger") || "right-index",
-      });
-      state.selectedEmployee = response.employee;
-      state.enrollmentLog = response.messages || [];
-      renderEmployeesPanel();
-    } catch (error) {
-      alert(String(error));
-    } finally {
-      setBusy(event.currentTarget, false);
-    }
   });
 }
 
@@ -702,13 +806,14 @@ async function renderDatabasePanel() {
     state.adminDbTable = tables[0]?.name || "employees";
   }
   const data = await invoke("list_admin_table_rows", { table: state.adminDbTable });
+  const readOnly = !data.editable;
   const selected =
     state.selectedDbRow && state.selectedDbRow.table === data.table
       ? state.selectedDbRow
       : { table: data.table, rowid: null, values: emptyDbValues(data.columns) };
   const visibleColumns = data.columns.slice(0, 8);
   setPanel(
-    "Database Tables",
+    `Database Tables${readOnly ? " (read-only)" : ""}`,
     `
       <select data-db-table>
         ${tables
@@ -721,31 +826,40 @@ async function renderDatabasePanel() {
           )
           .join("")}
       </select>
-      <button class="ghost" data-new-db-row>New Row</button>
+      ${readOnly ? '' : `<button class="ghost" data-new-db-row>New Row</button>`}
       <button class="ghost" data-refresh>Refresh</button>
     `,
-    `
-      <form class="form-grid db-form" data-db-form>
-        ${data.columns.map((column) => dbField(column, selected.values[column.name])).join("")}
-        <div class="wide panel-actions">
-          <button class="primary" type="submit">Save Row</button>
-          ${
-            selected.rowid
-              ? `<button class="danger" type="button" data-delete-db-row>Delete Row</button>`
-              : ""
-          }
-        </div>
-      </form>
-      ${table(
-        visibleColumns.map((column) => column.label),
-        data.rows.map((row) => ({
-          clickable: true,
-          attrs: `data-db-row="${row.rowid}"`,
-          review: row.values.needs_admin_review === true || row.values.resolved === false,
-          cells: visibleColumns.map((column) => dbDisplay(row.values[column.name])),
-        })),
-      )}
-    `,
+    readOnly
+      ? `<div class="message">This table is read-only. Use the dedicated panel to manage records.</div>
+         ${table(
+           visibleColumns.map((column) => column.label),
+           data.rows.map((row) => ({
+             review: row.values.needs_admin_review === true || row.values.resolved === false,
+              cells: visibleColumns.map((column) => dbDisplay(column.name, row.values[column.name])),
+            })),
+          )}`
+       : `
+        <form class="form-grid db-form" data-db-form>
+          ${data.columns.map((column) => dbField(column, selected.values[column.name])).join("")}
+          <div class="wide panel-actions">
+            <button class="primary" type="submit">Save Row</button>
+            ${
+              selected.rowid
+                ? `<button class="danger" type="button" data-delete-db-row>Delete Row</button>`
+                : ""
+            }
+          </div>
+        </form>
+        ${table(
+          visibleColumns.map((column) => column.label),
+          data.rows.map((row) => ({
+            clickable: true,
+            attrs: `data-db-row="${row.rowid}"`,
+            review: row.values.needs_admin_review === true || row.values.resolved === false,
+            cells: visibleColumns.map((column) => dbDisplay(column.name, row.values[column.name])),
+          })),
+        )}
+     `,
   );
 
   app.querySelector("[data-db-table]").addEventListener("change", (event) => {
@@ -753,44 +867,48 @@ async function renderDatabasePanel() {
     state.selectedDbRow = null;
     renderDatabasePanel();
   });
-  app.querySelector("[data-new-db-row]").addEventListener("click", () => {
-    state.selectedDbRow = { table: data.table, rowid: null, values: emptyDbValues(data.columns) };
-    renderDatabasePanel();
-  });
+  if (!readOnly) {
+    app.querySelector("[data-new-db-row]").addEventListener("click", () => {
+      state.selectedDbRow = { table: data.table, rowid: null, values: emptyDbValues(data.columns) };
+      renderDatabasePanel();
+    });
+    app.querySelector("[data-db-form]").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const values = collectDbValues(data.columns, event.currentTarget);
+      const result = await invoke("save_admin_table_row", {
+        input: {
+          table: data.table,
+          rowid: selected.rowid,
+          values,
+        },
+      });
+      state.selectedDbRow = null;
+      state.adminDbTable = result.table;
+      renderDatabasePanel();
+    });
+    app.querySelector("[data-delete-db-row]")?.addEventListener("click", async () => {
+      if (!selected.rowid) return;
+      await invoke("delete_admin_table_row", {
+        table: data.table,
+        rowid: selected.rowid,
+      });
+      state.selectedDbRow = null;
+      renderDatabasePanel();
+    });
+  }
   app.querySelector("[data-refresh]").addEventListener("click", () => {
     state.selectedDbRow = null;
     renderDatabasePanel();
   });
-  app.querySelectorAll("[data-db-row]").forEach((rowElement) => {
-    rowElement.addEventListener("click", () => {
-      const row = data.rows.find((item) => item.rowid === Number(rowElement.dataset.dbRow));
-      state.selectedDbRow = row ? { table: data.table, rowid: row.rowid, values: row.values } : null;
-      renderDatabasePanel();
+  if (!readOnly) {
+    app.querySelectorAll("[data-db-row]").forEach((rowElement) => {
+      rowElement.addEventListener("click", () => {
+        const row = data.rows.find((item) => item.rowid === Number(rowElement.dataset.dbRow));
+        state.selectedDbRow = row ? { table: data.table, rowid: row.rowid, values: row.values } : null;
+        renderDatabasePanel();
+      });
     });
-  });
-  app.querySelector("[data-db-form]").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const values = collectDbValues(data.columns, event.currentTarget);
-    const result = await invoke("save_admin_table_row", {
-      input: {
-        table: data.table,
-        rowid: selected.rowid,
-        values,
-      },
-    });
-    state.selectedDbRow = null;
-    state.adminDbTable = result.table;
-    renderDatabasePanel();
-  });
-  app.querySelector("[data-delete-db-row]")?.addEventListener("click", async () => {
-    if (!selected.rowid) return;
-    await invoke("delete_admin_table_row", {
-      table: data.table,
-      rowid: selected.rowid,
-    });
-    state.selectedDbRow = null;
-    renderDatabasePanel();
-  });
+  }
 }
 
 // ==================== Admin: Payroll Panel ====================
@@ -1131,7 +1249,7 @@ function renderStaffDashboard() {
   if (employee.permissions.includes("cornice_rates_view")) tabs.push(["rates", "Rates"]);
 
   app.innerHTML = workspaceShell("Staff", employee.name, tabs, state.staffView);
-  app.querySelector("[data-back]").addEventListener("click", renderStaffPicker);
+  app.querySelector("[data-back]").addEventListener("click", () => { endSession(); renderHome(); });
   app.querySelectorAll("[data-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       state.staffView = button.dataset.tab;
@@ -1600,11 +1718,10 @@ function workspaceShell(title, subtitle, tabs, active) {
 }
 
 function topbar(title, subtitle) {
-  const helper = state.status?.fingerprint_helper_found ? "Fingerprint ready" : "Fingerprint helper missing";
   const logo = state.logoDataUrl || "./assets/HPS.png";
   return `
     <header class="topbar">
-      <button class="icon ghost" data-back title="Back">Back</button>
+      <button class="icon ghost" data-back title="Back">←</button>
       <div class="brand">
         <img src="${logo}" alt="" />
         <div class="title">
@@ -1612,8 +1729,8 @@ function topbar(title, subtitle) {
           <p>${escapeHtml(subtitle)}</p>
         </div>
       </div>
-      <div class="status-pill" title="${escapeHtml(state.status?.database_path || "")}">
-        ${escapeHtml(helper)}
+      <div class="status-pill" data-status-pill title="${escapeHtml(state.status?.database_path || "")}">
+        Session Timer<span data-session-remaining></span>
       </div>
     </header>
   `;
@@ -1792,10 +1909,14 @@ function dbInputValue(value) {
   return String(value);
 }
 
-function dbDisplay(value) {
+function dbDisplay(columnName, value) {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  return String(value);
+  const str = String(value);
+  if (columnName && /timestamp|created_at|updated_at|edited_at/.test(columnName) && str.includes("T")) {
+    return str.replace("T", " ");
+  }
+  return str;
 }
 
 function emptyEmployee() {

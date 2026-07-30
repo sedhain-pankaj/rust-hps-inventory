@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use std::sync::Arc;
 
 use sqlx::Row;
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::{
     db::{
@@ -40,6 +40,7 @@ struct AdminTable {
     name: &'static str,
     label: &'static str,
     columns: &'static [AdminColumn],
+    editable: bool,
 }
 
 const EMPLOYEE_COLUMNS: &[AdminColumn] = &[
@@ -161,66 +162,79 @@ const ADMIN_TABLES: &[AdminTable] = &[
         name: "employees",
         label: "Employees",
         columns: EMPLOYEE_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "employee_permissions",
         label: "Employee Permissions",
         columns: EMPLOYEE_PERMISSION_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "fingerprint_templates",
         label: "Fingerprint Templates",
         columns: FINGERPRINT_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "cornice_rates",
         label: "Cornice Rates",
         columns: CORNICE_RATE_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "stock_items",
         label: "Stock Items",
         columns: STOCK_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "time_clock_events",
         label: "Time Clock Events",
         columns: TIME_CLOCK_COLUMNS,
+        editable: false,
     },
     AdminTable {
         name: "cornice_logs",
         label: "Cornice Logs",
         columns: CORNICE_LOG_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "production_logs",
         label: "Production Logs",
         columns: PRODUCTION_LOG_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "overstock_locations",
         label: "Overstock Locations",
         columns: OVERSTOCK_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "deliveries",
         label: "Deliveries",
         columns: DELIVERY_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "admin_notifications",
         label: "Admin Notifications",
         columns: NOTIFICATION_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "app_meta",
         label: "App Metadata",
         columns: APP_META_COLUMNS,
+        editable: true,
     },
     AdminTable {
         name: "app_assets",
         label: "App Assets",
         columns: APP_ASSET_COLUMNS,
+        editable: true,
     },
 ];
 
@@ -484,49 +498,6 @@ pub async fn authenticate_fingerprint(
         employee,
         source: "fingerprint".to_string(),
     })
-}
-
-#[tauri::command]
-pub async fn enroll_fingerprint(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    employee_id: String,
-    finger: String,
-) -> CommandResult<FingerprintEnrollResponse> {
-    let employee = employee_by_id(&state.db, &employee_id)
-        .await
-        .map_err(to_string)?
-        .ok_or_else(|| "Choose a saved employee before enrolling a fingerprint.".to_string())?;
-    let progress_buffer = state.fingerprint_progress.clone();
-    if let Ok(mut lines) = progress_buffer.lock() {
-        lines.clear();
-    }
-    let app_for_progress = app.clone();
-    let progress = Arc::new(move |line: String| {
-        if let Ok(mut lines) = progress_buffer.lock() {
-            lines.push(line.clone());
-        }
-        let app_for_emit = app_for_progress.clone();
-        tauri::async_runtime::spawn(async move {
-            let _ = app_for_emit.emit("fingerprint_progress", line.clone());
-            let _ = app_for_emit.emit("fingerprint-progress", line);
-        });
-    });
-    let messages = fingerprint::enroll_employee(
-        &state.db,
-        &state.paths,
-        &employee.id,
-        &finger,
-        Some(progress),
-    )
-    .await
-    .map_err(to_string)?;
-
-    let employee = employee_by_id(&state.db, &employee.id)
-        .await
-        .map_err(to_string)?
-        .ok_or_else(|| "Employee was enrolled but could not be reloaded.".to_string())?;
-    Ok(FingerprintEnrollResponse { employee, messages })
 }
 
 #[tauri::command]
@@ -1080,6 +1051,7 @@ pub async fn list_admin_table_rows(
     Ok(AdminTableData {
         table: config.name.to_string(),
         label: config.label.to_string(),
+        editable: config.editable,
         columns: admin_column_info(config),
         rows: output_rows,
     })
@@ -1091,6 +1063,9 @@ pub async fn save_admin_table_row(
     input: AdminTableSaveInput,
 ) -> CommandResult<AdminTableData> {
     let config = admin_table_config(&input.table)?;
+    if !config.editable {
+        return Err("This table is read-only. Use the dedicated panel to edit.".to_string());
+    }
     let values = input
         .values
         .as_object()
@@ -1153,6 +1128,9 @@ pub async fn delete_admin_table_row(
     rowid: i64,
 ) -> CommandResult<AdminTableData> {
     let config = admin_table_config(&table)?;
+    if !config.editable {
+        return Err("This table is read-only.".to_string());
+    }
     let sql = format!("DELETE FROM {} WHERE rowid = ?", config.name);
     sqlx::query(&sql)
         .bind(rowid)

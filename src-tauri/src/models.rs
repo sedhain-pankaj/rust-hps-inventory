@@ -45,12 +45,6 @@ pub struct AuthResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct FingerprintEnrollResponse {
-    pub employee: Employee,
-    pub messages: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct FingerprintEnrollStartResponse {
     pub job_id: String,
 }
@@ -265,6 +259,7 @@ pub struct AdminTableRow {
 pub struct AdminTableData {
     pub table: String,
     pub label: String,
+    pub editable: bool,
     pub columns: Vec<AdminColumnInfo>,
     pub rows: Vec<AdminTableRow>,
 }

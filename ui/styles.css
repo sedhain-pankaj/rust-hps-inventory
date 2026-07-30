@@ -89,10 +89,10 @@ button.ghost {
 }
 
 button.icon {
-  width: 64px;
-  min-width: 64px;
-  padding: 0;
-  font-size: 1.5rem;
+  width: auto;
+  min-height: 52px;
+  padding: 0 16px;
+  font-size: 1.3rem;
 }
 
 button:disabled {
@@ -527,5 +527,58 @@ label {
 #cornice-search-results {
   font-size: 0.85em;
   color: #666;
+}
+
+/* Lock screen overlay */
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  cursor: pointer;
+}
+
+.lock-overlay .lock-prompt {
+  margin-top: 3vh;
+  font-size: 1.5rem;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Auth fingerprint icon */
+.auth-fp-icon {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 1em auto;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.3s;
+}
+
+.auth-fp-icon.scanning {
+  color: var(--amber);
+  animation: fp-radiance 1.5s ease-in-out infinite;
+}
+
+@keyframes fp-radiance {
+  0%, 100% {
+    opacity: 0.5;
+    filter: drop-shadow(0 0 4px var(--amber));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 18px var(--amber));
+  }
 }
 

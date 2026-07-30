@@ -126,3 +126,45 @@ Tauri handles the full-screen webview, but true "unskippable kiosk" behavior (bl
 ---
 
 *Fingerprint hardware integration (WA28/CS9711) already completed — no longer an open risk.*
+
+---
+
+## PROGRESS — Changes Made
+
+### Phase A: Read-only tables (Database tab)
+- Added `editable: bool` to `AdminTable` struct and `AdminTableData` response model
+- All 13 admin tables marked editable except `time_clock_events` (set to `false`)
+- `save_admin_table_row` / `delete_admin_table_row` return early with error for non-editable tables
+- Frontend shows "(read-only)" badge in table header, hides New Row button/form/save/delete buttons
+- Timestamp columns display as `2026-07-22 21:25:19` (space separator) instead of ISO format
+
+### Phase B: Session management + lock screen
+- Added session state tracking: `sessionUser`, `sessionRole`, `sessionLocked`, `idleTimer`
+- 5-minute idle timeout triggers full-screen lock overlay with live clock and pulsing "Tap anywhere to unlock"
+- Global activity listeners (`click`, `keydown`, `touchstart`) reset the idle timer on any user interaction
+- Back button from admin/staff dashboard navigates to Home (not role menu), session ends
+- Lock screen re-auth via fingerprint or password returns to previous dashboard
+- CSS added for `.lock-overlay` with pulse animation
+
+### Phase C: Delete blocking enroll path
+- Removed `enroll_fingerprint` command from `commands.rs` and registration in `lib.rs`
+- Removed "Enroll Fingerprint" button and click handler from Employees panel (`app.js`)
+- Removed orphaned `FingerprintEnrollResponse` struct and unused `Emitter` import
+- Fingerprint enrollment now only via dedicated Enroll tab using non-blocking job/poll pattern
+
+### Phase D: Back icon ←
+- Topbar back button changed from "Back" text to "←" arrow icon
+
+### Phase E: Session timer in status pill
+- Status pill shows idle countdown (e.g., `Fingerprint ready · 4:59`) when session is active
+- Countdown updates every second, resets on any user activity
+- Only visible when a user is logged in and not locked
+
+**Files modified:**
+- `src-tauri/src/commands.rs` — read-only guards, removed blocking enroll command
+- `src-tauri/src/models.rs` — `editable` field on admin tables, removed orphaned struct
+- `src-tauri/src/lib.rs` — removed blocking command registration
+- `ui/js/app.js` — session management, lock screen, back→home, timestamps, ← icon, session timer
+- `ui/styles.css` — lock overlay styles with pulse animation
+
+*Last updated: 2026-07-25*
