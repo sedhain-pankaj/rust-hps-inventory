@@ -1721,7 +1721,7 @@ function topbar(title, subtitle) {
   const logo = state.logoDataUrl || "./assets/HPS.png";
   return `
     <header class="topbar">
-      <button class="icon ghost" data-back title="Back">←</button>
+      <button class="icon ghost" data-back title="Back"><img src="./assets/noun-arrow-back-2352160.svg" alt="Back" width="24" height="24" /></button>
       <div class="brand">
         <img src="${logo}" alt="" />
         <div class="title">

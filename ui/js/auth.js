@@ -24,15 +24,7 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
           <div class="body">
             <div class="message">${escapeHtml(employeeLabel)}</div>
             <div id="auth-fp-icon" class="auth-fp-icon scanning">
-              <svg xmlns="http://www.w3.org/2000/svg" width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M2 12C2 6.5 6.5 2 12 2a10 10 0 0 1 8 4"/>
-                <path d="M5 19.5C5.5 18 6 15 6 12c0-3.5 2.5-6 6-6"/>
-                <path d="M10 19c-.5-1-1-3.5-1-7"/>
-                <path d="M16 17c.8-1 1.5-3 2-5.5"/>
-                <path d="M14 17.5c.2-1 .5-2.5.5-4.5s-.3-3.5-.5-4.5"/>
-                <path d="M8 12c0-1 .2-2 .5-2.5"/>
-                <path d="M19 10.5c.3-.5.5-1 .5-1.5s-.2-1-.5-1.5"/>
-              </svg>
+              <img src="./assets/noun-fingerprint-1377758.svg" alt="Fingerprint" width="80" height="80" />
             </div>
             <div id="auth-fp-status" class="message" style="margin-top:0.5em;font-size:0.9em;text-align:center;">Scanning…</div>
             <label id="auth-password-label" style="display:none">
