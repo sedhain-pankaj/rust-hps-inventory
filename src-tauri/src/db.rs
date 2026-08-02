@@ -27,7 +27,7 @@ use crate::models::*;
 const CORNICE_RATE_CSV: &str = include_str!("../../assets/cornice_rate.csv");
 const OVERALL_STOCK_CSV: &str = include_str!("../../assets/overall_stock.csv");
 const HPS_LOGO: &[u8] = include_bytes!("../../assets/HPS.png");
-const LEGACY_ADMIN_HASH: &str = "74327943f791e17b6081b590be47d518d885b79972d37087df480448e0672094";
+const LEGACY_ADMIN_HASH: &str = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918";
 
 #[derive(Debug, Clone)]
 pub struct AppPaths {
