@@ -66,14 +66,19 @@ pub async fn identify_employee(db: &sqlx::SqlitePool, paths: &AppPaths) -> Resul
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
 
-    let attempts = env::var("HPS_FINGERPRINT_ATTEMPTS")
+    let max_attempts = env::var("HPS_FINGERPRINT_ATTEMPTS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
-        .unwrap_or(5);
+        .unwrap_or(3);
+    // Cap at 1 outer spawn — the helper already retries 3 times internally.
+    // Multiple spawns cause repeated open/close cycles that leave the CS9711
+    // USB device locked ("Resource busy [-6]"). The helper handles retry/NO_MATCH
+    // itself; re-spawning just poisons the device for subsequent enroll.
+    let attempts = if max_attempts <= 1 { 1 } else { 1 };
     let mut last_error = None;
 
-    for attempt in 1..=attempts {
+    for _attempt in 1..=attempts {
         let helper_for_task = helper.clone();
         let storage_for_task = storage.clone();
         let source_root_for_task = paths.source_root.clone();
@@ -110,15 +115,12 @@ pub async fn identify_employee(db: &sqlx::SqlitePool, paths: &AppPaths) -> Resul
                 last_error = Some(message);
             }
         }
-
-        if attempt < attempts {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
     }
 
     clear_template_cache(&storage);
+
     Err(anyhow!(
-        "{} after {attempts} scan attempts. Use password fallback or re-enroll the fingerprint.",
+        "{} after {attempts} scan attempt(s). Use password fallback or re-enroll the fingerprint.",
         last_error
             .unwrap_or_else(|| "Fingerprint helper finished without a match result".to_string())
     ))
@@ -135,24 +137,49 @@ pub async fn enroll_employee(
     let storage = paths.fingerprint_dir.clone();
     fs::create_dir_all(&storage).context("Could not create fingerprint storage")?;
 
-    let args = vec![
+    let args: Vec<String> = vec![
         "enroll".to_string(),
         path_string(&storage),
         employee_id.to_string(),
         finger.to_string(),
     ];
-    let helper_for_task = helper.clone();
-    let source_root_for_task = paths.source_root.clone();
-    let lines = tokio::task::spawn_blocking(move || {
+    // Run enroll with one retry for "resource busy" — after a failed identify,
+    // the CS9711 USB driver may still be releasing the interface.
+    let helper_1 = helper.clone();
+    let source_1 = paths.source_root.clone();
+    let args_1 = args.clone();
+    let on_line_1 = on_line.clone();
+    let lines_raw: Result<Vec<String>, anyhow::Error> = tokio::task::spawn_blocking(move || {
         run_helper_with_events(
-            &helper_for_task,
-            &args,
-            on_line.as_deref(),
-            &source_root_for_task,
+            &helper_1,
+            &args_1,
+            on_line_1.as_deref(),
+            &source_1,
         )
     })
     .await
-    .context("Fingerprint enrollment task failed")??;
+    .context("Fingerprint enrollment task failed")?;
+
+    let lines = match &lines_raw {
+        Err(e) if e.to_string().to_ascii_lowercase().contains("resource busy") => {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let helper_r = helper.clone();
+            let source_r = paths.source_root.clone();
+            let args_r = args.clone();
+            let on_line_r = on_line.clone();
+            tokio::task::spawn_blocking(move || {
+                run_helper_with_events(
+                    &helper_r,
+                    &args_r,
+                    on_line_r.as_deref(),
+                    &source_r,
+                )
+            })
+            .await
+            .context("Fingerprint enrollment retry failed")??
+        }
+        _ => lines_raw?,
+    };
 
     let template_path = storage.join(format!("{employee_id}.fpdata"));
     let template = fs::read(&template_path).with_context(|| {
@@ -220,7 +247,9 @@ fn is_fatal_identify_error(message: &str) -> bool {
         || lower.contains("no compatible enrolled")
         || lower.contains("helper was not found")
         || lower.contains("permission")
-        || lower.contains("open")
+        || lower.contains("resource busy")
+        || lower.contains("device or resource busy")
+        || (lower.contains("busy") && lower.contains("[-6]"))
 }
 
 fn run_helper(helper: &Path, args: &[String], working_dir: &Path) -> Result<Vec<String>> {

@@ -20,6 +20,8 @@ typedef struct
   FpPrint *print;
 } PrintRecord;
 
+static void safe_close_device (FpDevice *device);
+
 static void
 print_record_free (PrintRecord *record)
 {
@@ -235,7 +237,7 @@ enroll_employee (const char *storage_dir,
   if (!enrolled_print)
     {
       print_line ("ERROR", error ? error->message : "Enrollment failed.");
-      fp_device_close_sync (device, NULL, NULL);
+      safe_close_device (device);
       return 1;
     }
 
@@ -247,11 +249,11 @@ enroll_employee (const char *storage_dir,
   if (!save_print (enrolled_print, path, &error))
     {
       print_line ("ERROR", error->message);
-      fp_device_close_sync (device, NULL, NULL);
+      safe_close_device (device);
       return 1;
     }
 
-  fp_device_close_sync (device, NULL, NULL);
+  safe_close_device (device);
   g_print ("ENROLLED|%s|%s\n", employee_id, path);
   fflush (stdout);
   return 0;
@@ -356,6 +358,26 @@ find_record_for_match (GPtrArray *records,
   return NULL;
 }
 
+static void
+safe_close_device (FpDevice *device)
+{
+  g_autoptr(GError) close_error = NULL;
+
+  fp_device_close_sync (device, NULL, &close_error);
+  if (close_error)
+    {
+      g_warning ("Close attempt 1 warning: %s", close_error->message);
+      close_error = NULL;
+      g_usleep (200 * 1000);
+      fp_device_close_sync (device, NULL, &close_error);
+    }
+
+  /* CS9711 dev_close releases the USB interface but pending async transfers may
+   * still be draining in the kernel. A brief pause ensures the next process can
+   * claim the interface without hitting EBUSY. */
+  g_usleep (300 * 1000);
+}
+
 static int
 identify_employee (const char *storage_dir)
 {
@@ -389,7 +411,7 @@ identify_employee (const char *storage_dir)
   if (!records->len)
     {
       print_line ("ERROR", "No compatible enrolled fingerprints found.");
-      fp_device_close_sync (device, NULL, NULL);
+      safe_close_device (device);
       return 1;
     }
 
@@ -414,18 +436,21 @@ identify_employee (const char *storage_dir)
       if (error && error->domain == FP_DEVICE_RETRY)
         {
           print_line ("RETRY", error->message);
+          g_clear_error (&error);
+          g_usleep (500 * 1000); /* 500ms pause before next scan attempt */
           continue;
         }
 
       print_line ("ERROR", error ? error->message : "Identification failed.");
-      fp_device_close_sync (device, NULL, NULL);
+      safe_close_device (device);
       return 1;
     }
 
   if (!ok)
     {
       print_line ("ERROR", error ? error->message : "Identification failed.");
-      fp_device_close_sync (device, NULL, NULL);
+      safe_close_device (device);
+      g_usleep (1 * 1000 * 1000); /* let USB driver fully release */
       return 1;
     }
 
@@ -446,7 +471,7 @@ identify_employee (const char *storage_dir)
     }
 
   fflush (stdout);
-  fp_device_close_sync (device, NULL, NULL);
+  safe_close_device (device);
   return ret;
 }
 
