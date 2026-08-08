@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -45,6 +45,7 @@ pub struct AppState {
     pub fingerprint_progress: Arc<Mutex<Vec<String>>>,
     pub enroll_jobs: Arc<Mutex<HashMap<String, FingerprintEnrollJob>>>,
     pub enroll_job_seq: Arc<AtomicU64>,
+    pub active_helper_pids: Arc<Mutex<HashSet<u32>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +113,7 @@ impl AppState {
             fingerprint_progress: Arc::new(Mutex::new(Vec::new())),
             enroll_jobs: Arc::new(Mutex::new(HashMap::new())),
             enroll_job_seq: Arc::new(AtomicU64::new(0)),
+            active_helper_pids: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 }

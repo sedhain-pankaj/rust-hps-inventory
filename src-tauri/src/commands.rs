@@ -479,7 +479,7 @@ pub async fn authenticate_fingerprint(
     state: State<'_, AppState>,
     require_admin: bool,
 ) -> CommandResult<AuthResponse> {
-    let employee_id = fingerprint::identify_employee(&state.db, &state.paths)
+    let employee_id = fingerprint::identify_employee(&state.db, &state.paths, &state.active_helper_pids)
         .await
         .map_err(to_string)?;
     let employee = employee_by_id(&state.db, &employee_id)
@@ -535,6 +535,7 @@ pub async fn start_fingerprint_enroll(
     let db = state.db.clone();
     let paths = state.paths.clone();
     let jobs = state.enroll_jobs.clone();
+    let active_pids = state.active_helper_pids.clone();
     let job_id_for_task = job_id.clone();
     let employee_id_for_task = employee.id.clone();
     tauri::async_runtime::spawn(async move {
@@ -554,6 +555,7 @@ pub async fn start_fingerprint_enroll(
             &employee_id_for_task,
             &finger,
             Some(progress),
+            &active_pids,
         )
         .await;
 

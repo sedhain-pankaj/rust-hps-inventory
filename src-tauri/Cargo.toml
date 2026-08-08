@@ -21,6 +21,7 @@ anyhow = "1.0.102"
 argon2 = "0.5.3"
 base64 = "0.22.1"
 chrono = { version = "0.4.44", features = ["serde"] }
+libc = "0.2"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

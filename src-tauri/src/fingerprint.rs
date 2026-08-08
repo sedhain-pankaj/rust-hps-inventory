@@ -1,9 +1,10 @@
 use std::{
+    collections::HashSet,
     env, fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -18,6 +19,8 @@ const BUNDLED_HELPER: &[u8] =
     include_bytes!("../../libfprint-CS9711/build/examples/employee-clock-helper");
 const BUNDLED_LIBFPRINT: &[u8] =
     include_bytes!("../../libfprint-CS9711/build/libfprint/libfprint-2.so.2.0.0");
+
+type ActivePids = Arc<Mutex<HashSet<u32>>>;
 
 pub fn find_helper_binary(paths: &AppPaths) -> Option<PathBuf> {
     if let Ok(configured) = env::var(HELPER_ENV) {
@@ -61,7 +64,39 @@ pub fn find_helper_binary(paths: &AppPaths) -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-pub async fn identify_employee(db: &sqlx::SqlitePool, paths: &AppPaths) -> Result<String> {
+/// Kill any previously tracked helper processes that may still be running
+/// and holding the USB device. Called before each new fingerprint operation.
+pub fn kill_orphaned_helpers(active_pids: &ActivePids) {
+    let pids_to_kill = {
+        let guard = active_pids.lock().unwrap();
+        guard.iter().copied().collect::<Vec<u32>>()
+    };
+
+    for pid in pids_to_kill {
+        #[cfg(unix)]
+        unsafe {
+            let _ = libc::kill(pid as i32, libc::SIGTERM);
+            thread::sleep(Duration::from_millis(100));
+            let _ = libc::kill(pid as i32, libc::SIGKILL);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = pid;
+        }
+    }
+
+    {
+        let mut guard = active_pids.lock().unwrap();
+        guard.clear();
+    }
+}
+
+pub async fn identify_employee(
+    db: &sqlx::SqlitePool,
+    paths: &AppPaths,
+    active_pids: &ActivePids,
+) -> Result<String> {
+    kill_orphaned_helpers(active_pids);
     export_templates(db, paths).await?;
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
@@ -82,11 +117,13 @@ pub async fn identify_employee(db: &sqlx::SqlitePool, paths: &AppPaths) -> Resul
         let helper_for_task = helper.clone();
         let storage_for_task = storage.clone();
         let source_root_for_task = paths.source_root.clone();
+        let active_pids_for_task = active_pids.clone();
         let result = tokio::task::spawn_blocking(move || {
             run_helper(
                 &helper_for_task,
                 &["identify".to_string(), path_string(&storage_for_task)],
                 &source_root_for_task,
+                &active_pids_for_task,
             )
         })
         .await
@@ -132,7 +169,9 @@ pub async fn enroll_employee(
     employee_id: &str,
     finger: &str,
     on_line: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    active_pids: &ActivePids,
 ) -> Result<Vec<String>> {
+    kill_orphaned_helpers(active_pids);
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
     fs::create_dir_all(&storage).context("Could not create fingerprint storage")?;
@@ -149,12 +188,14 @@ pub async fn enroll_employee(
     let source_1 = paths.source_root.clone();
     let args_1 = args.clone();
     let on_line_1 = on_line.clone();
+    let active_pids_1 = active_pids.clone();
     let lines_raw: Result<Vec<String>, anyhow::Error> = tokio::task::spawn_blocking(move || {
         run_helper_with_events(
             &helper_1,
             &args_1,
             on_line_1.as_deref(),
             &source_1,
+            &active_pids_1,
         )
     })
     .await
@@ -162,17 +203,20 @@ pub async fn enroll_employee(
 
     let lines = match &lines_raw {
         Err(e) if e.to_string().to_ascii_lowercase().contains("resource busy") => {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            kill_orphaned_helpers(active_pids);
             let helper_r = helper.clone();
             let source_r = paths.source_root.clone();
             let args_r = args.clone();
             let on_line_r = on_line.clone();
+            let active_pids_r = active_pids.clone();
             tokio::task::spawn_blocking(move || {
                 run_helper_with_events(
                     &helper_r,
                     &args_r,
                     on_line_r.as_deref(),
                     &source_r,
+                    &active_pids_r,
                 )
             })
             .await
@@ -252,8 +296,13 @@ fn is_fatal_identify_error(message: &str) -> bool {
         || (lower.contains("busy") && lower.contains("[-6]"))
 }
 
-fn run_helper(helper: &Path, args: &[String], working_dir: &Path) -> Result<Vec<String>> {
-    run_helper_with_events(helper, args, None, working_dir)
+fn run_helper(
+    helper: &Path,
+    args: &[String],
+    working_dir: &Path,
+    active_pids: &ActivePids,
+) -> Result<Vec<String>> {
+    run_helper_with_events(helper, args, None, working_dir, active_pids)
 }
 
 fn run_helper_with_events(
@@ -261,6 +310,7 @@ fn run_helper_with_events(
     args: &[String],
     on_line: Option<&(dyn Fn(String) + Send + Sync)>,
     working_dir: &Path,
+    active_pids: &ActivePids,
 ) -> Result<Vec<String>> {
     let mut command = Command::new(helper);
     command.args(args);
@@ -280,6 +330,12 @@ fn run_helper_with_events(
     let mut child = command
         .spawn()
         .with_context(|| format!("Could not run fingerprint helper at {}", helper.display()))?;
+
+    let pid = child.id();
+    {
+        let mut guard = active_pids.lock().unwrap();
+        guard.insert(pid);
+    }
 
     let (tx, rx) = mpsc::channel();
     if let Some(stdout) = child.stdout.take() {
@@ -318,6 +374,15 @@ fn run_helper_with_events(
                 helper.display()
             )
         })? {
+            // Always reap the child process to prevent zombies
+            let _ = child.wait();
+
+            // Remove PID from tracking since process has exited
+            {
+                let mut guard = active_pids.lock().unwrap();
+                guard.remove(&pid);
+            }
+
             if status.success() {
                 return Ok(lines);
             }
@@ -333,6 +398,11 @@ fn run_helper_with_events(
         if timeout_secs > 0 && started.elapsed() > Duration::from_secs(timeout_secs) {
             let _ = child.kill();
             let _ = child.wait();
+            // Remove PID from tracking since process has been killed
+            {
+                let mut guard = active_pids.lock().unwrap();
+                guard.remove(&pid);
+            }
             return Err(anyhow!(
                 "Fingerprint scan timed out after {timeout_secs} seconds."
             ));
