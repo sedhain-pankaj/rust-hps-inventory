@@ -99,6 +99,29 @@
     opacity:0;
   }
   .day-chip.has-entries .dot{opacity:1;}
+  .day-chip.day-off{opacity:0.45; text-decoration:line-through;}
+  .day-chip.day-off.active{opacity:0.7;}
+
+  .day-off-row{
+    width:100%; display:flex; align-items:center; gap:8px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:8px;
+    padding:10px; margin-bottom:12px; cursor:pointer; text-align:left;
+    font-family:'Inter',sans-serif;
+  }
+  .day-off-check{font-size:17px; color:var(--muted); line-height:1;}
+  .day-off-check.checked{color:var(--red);}
+  .day-off-label{font-size:13px; font-weight:500; color:var(--bone);}
+  .day-off-label.off{color:var(--red);}
+  .day-off-row.off{background:rgba(217,100,91,0.08); border-color:rgba(217,100,91,0.3);}
+  .day-off-note{font-size:11px; color:var(--muted); margin:-6px 0 12px 2px; line-height:1.4;}
+  #entryFormGroup.disabled-group{opacity:0.35; pointer-events:none;}
+
+  .off-row{opacity:0.55;}
+  .off-row .strike{text-decoration:line-through;}
+  .off-tag{
+    font-size:9px; font-weight:700; color:var(--red);
+    border:1px solid rgba(217,100,91,0.4); border-radius:4px; padding:1px 4px; margin-left:2px;
+  }
 
   /* Entry form */
   .entry-card{
@@ -391,6 +414,13 @@
   <div class="section" style="padding-top:0;">
     <div class="section-title">Add Entry — <span id="activeDayName"></span> <span id="entryCount" style="color:var(--amber);"></span></div>
     <div class="entry-card">
+      <button class="day-off-row" id="dayOffToggleBtn" onclick="toggleDayOff()">
+        <span class="day-off-check" id="dayOffCheckbox">☐</span>
+        <span class="day-off-label" id="dayOffLabel">Day Off (sick / personal leave)</span>
+      </button>
+      <div class="day-off-note" id="dayOffNote" style="display:none;"></div>
+
+      <div id="entryFormGroup">
       <span class="field-label">Cornice Code</span>
       <div class="code-wrap">
         <input type="text" id="codeInput" placeholder="e.g. 923" autocomplete="off">
@@ -411,6 +441,7 @@
       <div class="form-row">
         <button class="add-btn" id="addBtn">+ Add to Ledger</button>
       </div>
+      </div>
 
       <div class="ledger" id="dayLedger"></div>
       <div class="day-total-line" id="dayTotalLine" style="display:none;"></div>
@@ -430,9 +461,10 @@
   <div class="section">
     <div class="section-title">Estimate</div>
     <div class="summary">
+      <div class="summary-row"><span>Working days this week</span><span class="v" id="sumWorkingDays">7 of 7</span></div>
+      <div class="summary-row"><span>Base pay (<span id="sumDaysLbl">7</span> days × <span id="sumHoursLbl">8</span>hrs × $<span id="sumRateLbl">28.50</span>)</span><span class="v" id="sumBase">$0.00</span></div>
       <div class="summary-row"><span>Total units this week</span><span class="v" id="sumUnits">0</span></div>
-      <div class="summary-row"><span>Base pay (<span id="sumHoursLbl">40</span> hrs × $<span id="sumRateLbl">28.50</span>)</span><span class="v" id="sumBase">$0.00</span></div>
-      <div class="summary-row"><span>Units covered by base</span><span class="v" id="sumBaseUnits">180</span></div>
+      <div class="summary-row"><span>Unit target</span><span class="v" id="sumBaseUnits">0</span></div>
       <div class="summary-row"><span>Remaining units</span><span class="v" id="sumRemUnits">0</span></div>
       <div class="summary-row"><span>Extra pay (× $<span id="sumExtraRateLbl">3.80</span>/unit)</span><span class="v" id="sumExtra">$0.00</span></div>
       <div class="summary-total">
@@ -494,18 +526,43 @@
         <input type="number" id="setHourly" inputmode="decimal">
       </div>
       <div class="settings-row">
-        <label>Base Hours / Week</label>
-        <input type="number" id="setHours" inputmode="decimal">
+        <label>Base Hours / Working Day</label>
+        <input type="number" id="setHoursPerDay" inputmode="decimal">
       </div>
       <div class="settings-row">
-        <label>Base Units Covered</label>
-        <input type="number" id="setBaseUnits" inputmode="decimal">
+        <label>Base Units / Working Day</label>
+        <input type="number" id="setUnitsPerDay" inputmode="decimal">
       </div>
       <div class="settings-row">
         <label>Extra Rate ($ / unit)</label>
         <input type="number" id="setExtraRate" inputmode="decimal">
       </div>
+      <p style="font-size:11px;color:var(--muted);line-height:1.5;margin:-6px 0 12px 0;">
+        Base pay and the unit target both multiply by however many days this week aren't marked "Day Off".
+      </p>
       <button class="close-modal" id="saveSettingsBtn">Save</button>
+    </div>
+  </div>
+
+  <!-- Custom confirm dialog (native confirm() can be unreliable in sandboxed views) -->
+  <div class="modal-overlay" id="confirmOverlay" style="z-index:70;">
+    <div class="modal">
+      <h2 id="confirmTitle">Confirm</h2>
+      <p id="confirmMessage" style="font-size:13.5px; color:var(--muted); line-height:1.5; margin:0 0 16px 0;"></p>
+      <button class="close-modal" id="confirmYesBtn">Confirm</button>
+      <button class="ghost-btn" id="confirmNoBtn" style="margin-top:8px;">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Custom text-input dialog (native prompt() can be unreliable in sandboxed views) -->
+  <div class="modal-overlay" id="promptOverlay" style="z-index:70;">
+    <div class="modal">
+      <h2 id="promptTitle">Enter name</h2>
+      <div class="settings-row">
+        <input type="text" id="promptInput" autocomplete="off">
+      </div>
+      <button class="close-modal" id="promptSaveBtn">Save</button>
+      <button class="ghost-btn" id="promptCancelBtn" style="margin-top:8px;">Cancel</button>
     </div>
   </div>
 
@@ -572,7 +629,8 @@ const DAYS = ['Wed','Thu','Fri','Sat','Sun','Mon','Tue'];
 let state = {
   weekStart: null,        // ISO date string for the Wednesday that starts this pay week
   entries: [],            // {id, day, code, qty, rate}
-  settings: { hourly:28.5, hours:40, baseUnits:180, extraRate:3.8 }
+  dayOffs: {},            // {day: true/false} — only stores overrides away from the default
+  settings: { hourly:28.5, hoursPerDay:8, unitsPerDay:36, extraRate:3.8 }
 };
 let activeDay = 'Wed';
 
@@ -602,6 +660,18 @@ function addDays(iso, n){
   return isoDate(dt);
 }
 
+// A day defaults to "off" for Sat/Sun and "on" (working) for every other day,
+// unless explicitly overridden in state.dayOffs for the week being viewed.
+function isDayOff(day){
+  if(state.dayOffs.hasOwnProperty(day)) return state.dayOffs[day];
+  return day === 'Sat' || day === 'Sun';
+}
+async function setDayOff(day, off){
+  state.dayOffs[day] = off;
+  await saveState();
+  render();
+}
+
 async function loadSettings(){
   try{
     const s = await window.storage.get('settings', false);
@@ -614,9 +684,17 @@ async function loadWeek(weekStartIso){
   state.weekStart = weekStartIso;
   try{
     const w = await window.storage.get('week:' + weekStartIso, false);
-    state.entries = (w && w.value) ? JSON.parse(w.value) : [];
+    if(w && w.value){
+      const parsed = JSON.parse(w.value);
+      state.entries = parsed.entries || [];
+      state.dayOffs = parsed.dayOffs || {};
+    } else {
+      state.entries = [];
+      state.dayOffs = {};
+    }
   }catch(e){
     state.entries = [];
+    state.dayOffs = {};
   }
 }
 
@@ -628,7 +706,10 @@ async function loadState(){
 
 async function saveState(){
   try{
-    await window.storage.set('week:' + state.weekStart, JSON.stringify(state.entries), false);
+    await window.storage.set('week:' + state.weekStart, JSON.stringify({
+      entries: state.entries,
+      dayOffs: state.dayOffs
+    }), false);
   }catch(e){ toast('Save failed — check connection'); }
 }
 
@@ -671,8 +752,9 @@ function renderDayChips(){
   DAYS.forEach((d, i) => {
     const dt = new Date(start); dt.setDate(start.getDate()+i);
     const hasEntries = state.entries.some(e => e.day === d);
+    const off = isDayOff(d);
     const chip = document.createElement('div');
-    chip.className = 'day-chip' + (d===activeDay ? ' active':'') + (hasEntries ? ' has-entries':'');
+    chip.className = 'day-chip' + (d===activeDay ? ' active':'') + (hasEntries ? ' has-entries':'') + (off ? ' day-off':'');
     chip.innerHTML = `${d}<span style="display:block;font-size:9px;opacity:0.7;">${dt.getDate()}</span><span class="dot"></span>`;
     chip.onclick = () => { activeDay = d; render(); };
     row.appendChild(chip);
@@ -682,6 +764,33 @@ function renderDayChips(){
 
 function renderEntryForm(){
   document.getElementById('activeDayName').textContent = activeDay;
+  const off = isDayOff(activeDay);
+  const checkbox = document.getElementById('dayOffCheckbox');
+  const label = document.getElementById('dayOffLabel');
+  const row = document.getElementById('dayOffToggleBtn');
+  row.classList.toggle('off', off);
+  checkbox.classList.toggle('checked', off);
+  checkbox.textContent = off ? '☑' : '☐';
+  label.classList.toggle('off', off);
+
+  const formGroup = document.getElementById('entryFormGroup');
+  formGroup.classList.toggle('disabled-group', off);
+  [...formGroup.querySelectorAll('input,button')].forEach(el => el.disabled = off);
+
+  const offNote = document.getElementById('dayOffNote');
+  const dayEntryCount = state.entries.filter(e => e.day === activeDay).length;
+  if(off){
+    offNote.style.display = 'block';
+    offNote.textContent = dayEntryCount > 0
+      ? `Marked as a day off — no new entries can be added. (${dayEntryCount} existing entr${dayEntryCount===1?'y':'ies'} stay.)`
+      : 'Marked as a day off — no entries can be added.';
+  } else {
+    offNote.style.display = 'none';
+  }
+}
+
+async function toggleDayOff(){
+  await setDayOff(activeDay, !isDayOff(activeDay));
 }
 
 function unitsFor(e){ return Math.round(e.qty * e.rate * 100)/100; }
@@ -692,7 +801,9 @@ function renderDayLedger(){
   document.getElementById('entryCount').textContent = dayEntries.length ? `(${dayEntries.length} entries)` : '';
   ledger.innerHTML = '';
   if(dayEntries.length === 0){
-    ledger.innerHTML = '<div class="empty-note">No entries yet for ' + activeDay + '.</div>';
+    if(!isDayOff(activeDay)){
+      ledger.innerHTML = '<div class="empty-note">No entries yet for ' + activeDay + '.</div>';
+    }
   } else {
     dayEntries.forEach(e => {
       const row = document.createElement('div');
@@ -717,6 +828,10 @@ function renderDayLedger(){
   }
 }
 
+function workingDaysCount(){
+  return DAYS.filter(d => !isDayOff(d)).length;
+}
+
 function renderWeekTable(){
   const body = document.getElementById('weekTableBody');
   body.innerHTML = '';
@@ -725,14 +840,17 @@ function renderWeekTable(){
     const dayEntries = state.entries.filter(e => e.day === d);
     const total = dayEntries.reduce((s,e)=>s+unitsFor(e),0);
     weekTotal += total;
+    const off = isDayOff(d);
     const tr = document.createElement('tr');
     if(d === activeDay) tr.className = 'active-day';
-    tr.innerHTML = `<td>${d}</td><td>${dayEntries.length}</td><td>${dayEntries.length ? round2(total) : '—'}</td>`;
+    if(off) tr.className = (tr.className + ' off-row').trim();
+    const dayLabel = off ? `<span class="strike">${d}</span> <span class="off-tag">OFF</span>` : d;
+    tr.innerHTML = `<td>${dayLabel}</td><td>${dayEntries.length || '—'}</td><td>${dayEntries.length ? round2(total) : '—'}</td>`;
     body.appendChild(tr);
   });
   const trTotal = document.createElement('tr');
   trTotal.style.borderTop = '1px solid var(--line)';
-  trTotal.innerHTML = `<td style="padding-top:10px;color:var(--amber);font-weight:600;">WEEK</td><td style="padding-top:10px;"></td><td style="padding-top:10px;color:var(--amber);font-weight:600;">${round2(weekTotal)}</td>`;
+  trTotal.innerHTML = `<td style="padding-top:10px;color:var(--amber);font-weight:600;">WEEK<br><span style="font-size:9px;color:var(--muted);font-weight:400;">${workingDaysCount()} working days</span></td><td style="padding-top:10px;"></td><td style="padding-top:10px;color:var(--amber);font-weight:600;">${round2(weekTotal)}</td>`;
   body.appendChild(trTotal);
 }
 
@@ -740,17 +858,21 @@ function round2(n){ return Math.round(n*100)/100; }
 
 function renderSummary(){
   const totalUnits = state.entries.reduce((s,e)=>s+unitsFor(e),0);
-  const { hourly, hours, baseUnits, extraRate } = state.settings;
-  const basePay = hourly * hours;
-  const remaining = Math.max(0, round2(totalUnits - baseUnits));
+  const { hourly, hoursPerDay, unitsPerDay, extraRate } = state.settings;
+  const days = workingDaysCount();
+  const basePay = hourly * hoursPerDay * days;
+  const baseUnitTarget = unitsPerDay * days;
+  const remaining = Math.max(0, round2(totalUnits - baseUnitTarget));
   const extraPay = remaining * extraRate;
   const total = basePay + extraPay;
 
+  document.getElementById('sumWorkingDays').textContent = `${days} of 7`;
   document.getElementById('sumUnits').textContent = round2(totalUnits);
-  document.getElementById('sumHoursLbl').textContent = hours;
+  document.getElementById('sumHoursLbl').textContent = hoursPerDay;
   document.getElementById('sumRateLbl').textContent = hourly.toFixed(2);
+  document.getElementById('sumDaysLbl').textContent = days;
   document.getElementById('sumBase').textContent = '$' + basePay.toFixed(2);
-  document.getElementById('sumBaseUnits').textContent = baseUnits;
+  document.getElementById('sumBaseUnits').textContent = round2(baseUnitTarget);
   document.getElementById('sumRemUnits').textContent = remaining;
   document.getElementById('sumExtraRateLbl').textContent = extraRate.toFixed(2);
   document.getElementById('sumExtra').textContent = '$' + extraPay.toFixed(2);
@@ -831,6 +953,7 @@ codeInput.addEventListener('blur', () => setTimeout(()=>suggestions.classList.re
 codeInput.addEventListener('focus', updateSuggestions);
 
 async function addEntry(){
+  if(isDayOff(activeDay)){ toast(activeDay + ' is marked as a day off'); return; }
   const codeRaw = codeInput.value.trim();
   const qty = parseFloat(qtyInput.value);
   const rate = parseFloat(rateInput.value);
@@ -871,7 +994,8 @@ document.getElementById('thisWeekBtn').onclick = async () => {
 };
 
 document.getElementById('clearDayBtn').onclick = async () => {
-  if(!confirm('Clear all entries for ' + activeDay + '?')) return;
+  const ok = await showConfirm('Clear Day', `Clear all entries for ${activeDay}?`, 'Clear');
+  if(!ok) return;
   state.entries = state.entries.filter(e => e.day !== activeDay);
   await saveState();
   render();
@@ -881,8 +1005,8 @@ document.getElementById('clearDayBtn').onclick = async () => {
 const modalOverlay = document.getElementById('modalOverlay');
 document.getElementById('settingsBtn').onclick = () => {
   document.getElementById('setHourly').value = state.settings.hourly;
-  document.getElementById('setHours').value = state.settings.hours;
-  document.getElementById('setBaseUnits').value = state.settings.baseUnits;
+  document.getElementById('setHoursPerDay').value = state.settings.hoursPerDay;
+  document.getElementById('setUnitsPerDay').value = state.settings.unitsPerDay;
   document.getElementById('setExtraRate').value = state.settings.extraRate;
   modalOverlay.classList.add('open');
 };
@@ -890,8 +1014,8 @@ modalOverlay.addEventListener('click', e => { if(e.target === modalOverlay) moda
 document.getElementById('saveSettingsBtn').onclick = async () => {
   state.settings = {
     hourly: parseFloat(document.getElementById('setHourly').value) || 0,
-    hours: parseFloat(document.getElementById('setHours').value) || 0,
-    baseUnits: parseFloat(document.getElementById('setBaseUnits').value) || 0,
+    hoursPerDay: parseFloat(document.getElementById('setHoursPerDay').value) || 0,
+    unitsPerDay: parseFloat(document.getElementById('setUnitsPerDay').value) || 0,
     extraRate: parseFloat(document.getElementById('setExtraRate').value) || 0
   };
   await saveSettings();
@@ -899,6 +1023,46 @@ document.getElementById('saveSettingsBtn').onclick = async () => {
   render();
   toast('Settings saved');
 };
+
+// ---------- Custom confirm/prompt dialogs (Promise-based, replace native confirm()/prompt()) ----------
+function showConfirm(title, message, confirmLabel){
+  return new Promise(resolve => {
+    const overlay = document.getElementById('confirmOverlay');
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmMessage').textContent = message;
+    const yesBtn = document.getElementById('confirmYesBtn');
+    const noBtn = document.getElementById('confirmNoBtn');
+    yesBtn.textContent = confirmLabel || 'Confirm';
+    const cleanup = (result) => {
+      overlay.classList.remove('open');
+      yesBtn.onclick = null; noBtn.onclick = null;
+      resolve(result);
+    };
+    yesBtn.onclick = () => cleanup(true);
+    noBtn.onclick = () => cleanup(false);
+    overlay.classList.add('open');
+  });
+}
+
+function showTextPrompt(title, initialValue){
+  return new Promise(resolve => {
+    const overlay = document.getElementById('promptOverlay');
+    document.getElementById('promptTitle').textContent = title;
+    const input = document.getElementById('promptInput');
+    input.value = initialValue || '';
+    const saveBtn = document.getElementById('promptSaveBtn');
+    const cancelBtn = document.getElementById('promptCancelBtn');
+    const cleanup = (result) => {
+      overlay.classList.remove('open');
+      saveBtn.onclick = null; cancelBtn.onclick = null;
+      resolve(result);
+    };
+    saveBtn.onclick = () => cleanup(input.value);
+    cancelBtn.onclick = () => cleanup(null);
+    overlay.classList.add('open');
+    setTimeout(() => input.focus(), 50);
+  });
+}
 
 // ---------- Rate Book (manage categories & codes) ----------
 let openCats = new Set(['700 Series','900 Series']); // a couple open by default
@@ -989,7 +1153,7 @@ function escapeHtml(s){
 }
 
 document.getElementById('addCategoryBtn').onclick = async () => {
-  const name = prompt('New section name (e.g. "Archway Series")');
+  const name = await showTextPrompt('New Section', '');
   if(!name || !name.trim()) return;
   const trimmed = name.trim();
   if(categories.some(c => c.name.toLowerCase() === trimmed.toLowerCase())){
@@ -1004,7 +1168,7 @@ document.getElementById('addCategoryBtn').onclick = async () => {
 };
 
 async function renameCategory(oldName){
-  const name = prompt('Rename section', oldName);
+  const name = await showTextPrompt('Rename Section', oldName);
   if(!name || !name.trim() || name.trim() === oldName) return;
   const trimmed = name.trim();
   if(categories.some(c => c.name.toLowerCase() === trimmed.toLowerCase())){
@@ -1024,7 +1188,8 @@ async function deleteCategory(name){
   const msg = codeCount > 0
     ? `Delete "${name}"? Its ${codeCount} cornice code(s) will be moved to "Uncategorized".`
     : `Delete empty section "${name}"?`;
-  if(!confirm(msg)) return;
+  const ok = await showConfirm('Delete Section', msg, 'Delete');
+  if(!ok) return;
   if(codeCount > 0){
     let uncat = categories.find(c => c.name === 'Uncategorized');
     if(!uncat){ uncat = { name:'Uncategorized', codes:{} }; categories.push(uncat); }
@@ -1095,9 +1260,21 @@ document.getElementById('saveCodeBtn').onclick = async () => {
   // if code exists elsewhere (different code string than we're editing), block/overwrite
   const existingOwner = categoryOfCode(newCode);
   if(existingOwner && !(editingCode && newCode === editingCode)){
-    if(!confirm(`"${newCode}" already exists in "${existingOwner}". Overwrite it there and move to "${targetCat}"?`)) return;
+    const ok = await showConfirm(
+      'Code Already Exists',
+      `"${newCode}" already exists in "${existingOwner}". Overwrite it there and move to "${targetCat}"?`,
+      'Overwrite & Move'
+    );
+    if(!ok) return;
     const ownerCat = categories.find(c => c.name === existingOwner);
     delete ownerCat.codes[newCode];
+  } else {
+    const ok = await showConfirm(
+      'Save Cornice',
+      `Save "${newCode}" in "${targetCat}" with rate(s) ${rates.join('u, ')}u?`,
+      'Save'
+    );
+    if(!ok) return;
   }
 
   // remove old entry if renaming or moving category
@@ -1117,7 +1294,8 @@ document.getElementById('saveCodeBtn').onclick = async () => {
 
 document.getElementById('deleteCodeBtn').onclick = async () => {
   if(!editingCode) return;
-  if(!confirm(`Delete "${editingCode}" from the rate book?`)) return;
+  const ok = await showConfirm('Delete Cornice', `Delete "${editingCode}" from the rate book?`, 'Delete');
+  if(!ok) return;
   const cat = categories.find(c => c.name === editingOrigCategory);
   if(cat) delete cat.codes[editingCode];
   await saveRateTable();

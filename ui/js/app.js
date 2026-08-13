@@ -269,7 +269,7 @@ function renderCustomer() {
 }
 
 async function renderStaffPicker() {
-  state.staff = await invoke("list_staff", { includeInactive: false });
+  state.staff = (await invoke("list_staff", { includeInactive: false })).filter((e) => !e.is_admin);
   app.innerHTML = screenShell(
     "Staff",
     "Choose your name",
