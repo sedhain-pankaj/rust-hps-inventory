@@ -428,7 +428,8 @@ identify_employee (const char *storage_dir)
       g_clear_object (&match);
       g_clear_object (&scanned_print);
 
-      print_line ("READY", "identify");
+      g_print ("ATTEMPT|%u|3|waiting\n", attempt + 1);
+      fflush (stdout);
       ok = fp_device_identify_sync (device, gallery, NULL, NULL, NULL, &match, &scanned_print, &error);
       if (ok)
         break;

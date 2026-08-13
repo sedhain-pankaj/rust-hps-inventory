@@ -505,6 +505,7 @@ async function renderEnrollPanel() {
             : `<div>Ready to enroll.</div>`
         }
       </div>
+      <div id="enroll-scan-status" class="message" style="display:none;margin-top:0.5em;padding:0.5em 0.75em;border-radius:4px;font-size:0.9em;text-align:center;"></div>
       ${table(
         ["Name", "ID", "Admin", "Password", "Fingerprint"],
         employees.map((employee) => ({
@@ -554,6 +555,15 @@ async function renderEnrollPanel() {
       button.disabled = true;
       button.textContent = "Enrolling...";
       button.parentNode.insertBefore(cancelEl, button.nextSibling);
+      const scanStatus = document.getElementById("enroll-scan-status");
+      let enrollAttempts = 0;
+      let lastQuality = null;
+      if (scanStatus) {
+        scanStatus.style.display = "";
+        scanStatus.textContent = "Place your finger on the scanner...";
+        scanStatus.style.background = "#eaf7ff";
+        scanStatus.style.color = "#2c3e50";
+      }
       let nextIndex = 0;
       while (true) {
         await wait(250);
@@ -565,14 +575,43 @@ async function renderEnrollPanel() {
         if (Array.isArray(status.lines) && status.lines.length) {
           state.enrollmentLog.push(...status.lines);
           renderEnrollmentLog();
+          for (const line of status.lines) {
+            const raw = fingerprintEventLine(line);
+            if (raw.startsWith("RETRY|")) {
+              enrollAttempts++;
+              lastQuality = "retry";
+              const reason = raw.split("|").slice(1).join("|");
+              if (scanStatus) {
+                scanStatus.textContent = `Attempt ${enrollAttempts}: ${mapRetryReason(reason)}`;
+                scanStatus.style.background = "#fff3e6";
+                scanStatus.style.color = "#c0571a";
+              }
+            } else if (raw.startsWith("PROGRESS|")) {
+              lastQuality = "good";
+              const [, completed, total] = raw.split("|");
+              if (scanStatus) {
+                scanStatus.textContent = `✓ Good scan — stage ${completed}/${total} captured`;
+                scanStatus.style.background = "#e6fff0";
+                scanStatus.style.color = "#1a7a42";
+              }
+            } else if (raw.startsWith("READY|")) {
+              if (scanStatus && !lastQuality) {
+                scanStatus.textContent = "Scanner ready — place your finger now";
+                scanStatus.style.background = "#eaf7ff";
+                scanStatus.style.color = "#2c3e50";
+              }
+            }
+          }
         }
         if (status.state === "done") {
           state.selectedEmployee = status.employee || state.selectedEmployee;
           state.enrollmentDone = true;
+          if (scanStatus) scanStatus.style.display = "none";
           break;
         }
         if (status.state === "failed") {
           state.enrollmentDone = true;
+          if (scanStatus) scanStatus.style.display = "none";
           throw new Error(status.error || "Enrollment failed.");
         }
       }
@@ -1819,7 +1858,7 @@ function formatFingerprintLine(line) {
   if (!line) return "";
   if (line.startsWith("PROGRESS|")) {
     const [, completed, total] = line.split("|");
-    return `Enrollment stage ${completed} of ${total}`;
+    return `✓ Enrollment stage ${completed} of ${total}`;
   }
   if (line.startsWith("ENROLL_STAGES|")) {
     return `Reader requires ${line.split("|")[1]} enrollment stages`;
@@ -1829,7 +1868,10 @@ function formatFingerprintLine(line) {
     return `Reader: ${name} (${driver}, ${id})`;
   }
   if (line.startsWith("READY|")) return `Ready for ${line.split("|")[1]}`;
-  if (line.startsWith("RETRY|")) return `Retry: ${line.split("|")[1]}`;
+  if (line.startsWith("RETRY|")) {
+    const reason = line.split("|").slice(1).join("|");
+    return mapRetryReason(reason);
+  }
   if (line.startsWith("ENROLLED|")) return "Enrollment completed and stored in SQLite";
   const lower = line.toLowerCase();
   if (lower.includes("place") && lower.includes("finger")) {
@@ -1839,6 +1881,25 @@ function formatFingerprintLine(line) {
     return "Lift your finger, then place it again.";
   }
   return line;
+}
+
+function mapRetryReason(reason) {
+  const lower = reason.toLowerCase();
+  if (lower.includes("center") || lower.includes("not centered"))
+    return "⚠ Finger not centered — reposition and try again";
+  if (lower.includes("remove") || lower.includes("lift"))
+    return "⚠ Lift finger, wait for prompt, then place again";
+  if (lower.includes("short") || lower.includes("too short"))
+    return "⚠ Scan too short — keep finger steady longer";
+  if (lower.includes("fast") || lower.includes("too fast"))
+    return "⚠ Scan too fast — slow down and hold steady";
+  if (lower.includes("minutiae"))
+    return "⚠ Could not detect fingerprint details — try with clean, dry finger";
+  if (lower.includes("quality") || lower.includes("poor"))
+    return "⚠ Poor scan quality — adjust pressure and angle";
+  if (lower.includes("try again"))
+    return "⚠ Scan unclear — reposition finger and try again";
+  return `⚠ Retry: ${reason}`;
 }
 
 function fingerprintEventLine(payload) {

@@ -45,6 +45,8 @@ pub struct AppState {
     pub fingerprint_progress: Arc<Mutex<Vec<String>>>,
     pub enroll_jobs: Arc<Mutex<HashMap<String, FingerprintEnrollJob>>>,
     pub enroll_job_seq: Arc<AtomicU64>,
+    pub auth_jobs: Arc<Mutex<HashMap<String, FingerprintAuthJob>>>,
+    pub auth_job_seq: Arc<AtomicU64>,
     pub active_helper_pids: Arc<Mutex<HashSet<u32>>>,
 }
 
@@ -56,10 +58,23 @@ pub struct FingerprintEnrollJob {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FingerprintAuthJob {
+    pub matched_id: Option<String>,
+    pub lines: Vec<String>,
+    pub done: bool,
+    pub error: Option<String>,
+}
+
 impl AppState {
     pub fn next_enroll_job_id(&self) -> String {
         let id = self.enroll_job_seq.fetch_add(1, Ordering::Relaxed) + 1;
         format!("enroll-{id}")
+    }
+
+    pub fn next_auth_job_id(&self) -> String {
+        let id = self.auth_job_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("auth-{id}")
     }
 }
 
@@ -113,6 +128,8 @@ impl AppState {
             fingerprint_progress: Arc::new(Mutex::new(Vec::new())),
             enroll_jobs: Arc::new(Mutex::new(HashMap::new())),
             enroll_job_seq: Arc::new(AtomicU64::new(0)),
+            auth_jobs: Arc::new(Mutex::new(HashMap::new())),
+            auth_job_seq: Arc::new(AtomicU64::new(0)),
             active_helper_pids: Arc::new(Mutex::new(HashSet::new())),
         })
     }

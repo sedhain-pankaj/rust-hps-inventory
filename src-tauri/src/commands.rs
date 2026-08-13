@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{Local, NaiveDate, NaiveDateTime, Timelike};
 use serde_json::{Map, Value};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sqlx::Row;
 use tauri::State;
@@ -10,7 +10,7 @@ use crate::{
     db::{
         employee_by_id, format_seconds, hash_password, is_legacy_password_hash, list_employees,
         notification, parse_date_or_today, today_string, verify_password, week_start_for, AppState,
-        FingerprintEnrollJob,
+        FingerprintAuthJob, FingerprintEnrollJob,
     },
     fingerprint,
     models::*,
@@ -479,7 +479,7 @@ pub async fn authenticate_fingerprint(
     state: State<'_, AppState>,
     require_admin: bool,
 ) -> CommandResult<AuthResponse> {
-    let employee_id = fingerprint::identify_employee(&state.db, &state.paths, &state.active_helper_pids)
+    let employee_id = fingerprint::identify_employee(&state.db, &state.paths, None, &state.active_helper_pids)
         .await
         .map_err(to_string)?;
     let employee = employee_by_id(&state.db, &employee_id)
@@ -498,6 +498,188 @@ pub async fn authenticate_fingerprint(
         employee,
         source: "fingerprint".to_string(),
     })
+}
+
+#[tauri::command]
+pub async fn start_fingerprint_auth(
+    state: State<'_, AppState>,
+    require_admin: bool,
+) -> CommandResult<FingerprintAuthStartResponse> {
+    let job_id = state.next_auth_job_id();
+    {
+        let mut jobs = state
+            .auth_jobs
+            .lock()
+            .map_err(|_| "Could not create authentication job.".to_string())?;
+        jobs.insert(
+            job_id.clone(),
+            FingerprintAuthJob {
+                matched_id: None,
+                lines: vec!["Starting fingerprint identification…".to_string()],
+                done: false,
+                error: None,
+            },
+        );
+    }
+
+    let db = state.db.clone();
+    let paths = state.paths.clone();
+    let jobs = state.auth_jobs.clone();
+    let active_pids = state.active_helper_pids.clone();
+    let require_admin_clone = require_admin;
+    let job_id_for_spawn = job_id.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let job_id_for_task = job_id_for_spawn;
+
+        // Pre-check: if job was cancelled before we start
+        {
+            let should_cancel = {
+                if let Ok(all_jobs) = jobs.lock() {
+                    all_jobs.get(&job_id_for_task).map(|j| j.done).unwrap_or(false)
+                } else {
+                    false
+                }
+            };
+            if should_cancel {
+                fingerprint::kill_orphaned_helpers(&active_pids);
+                return;
+            }
+        }
+
+        let job_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let progress_for_callback = Arc::clone(&job_lines);
+        let progress = Arc::new(move |line: String| {
+            if let Ok(mut lines) = progress_for_callback.lock() {
+                lines.push(line);
+            }
+        });
+
+        let result = fingerprint::identify_employee(&db, &paths, Some(progress), &active_pids).await;
+
+        // Resolve employee validation outside of job lock
+        let resolution = match result {
+            Ok(employee_id) => {
+                match employee_by_id(&db, &employee_id).await {
+                    Ok(Some(emp)) => {
+                        if !emp.active {
+                            Err(format!("{} is inactive.", emp.name))
+                        } else if require_admin_clone && !emp.is_admin {
+                            Err("This fingerprint does not have admin privilege.".to_string())
+                        } else {
+                            Ok(employee_id)
+                        }
+                    }
+                    _ => Err("Fingerprint matched an unknown employee.".to_string()),
+                }
+            }
+            Err(error) => Err(error.to_string()),
+        };
+
+        // Update job state
+        if let Ok(mut all_jobs) = jobs.lock() {
+            if let Some(job) = all_jobs.get_mut(&job_id_for_task) {
+                if job.done {
+                    return;
+                }
+                // Merge streamed lines into job
+                if let Ok(lines) = job_lines.lock() {
+                    for line in lines.iter() {
+                        if !job.lines.contains(line) {
+                            job.lines.push(line.clone());
+                        }
+                    }
+                }
+                match resolution {
+                    Ok(mid) => {
+                        job.matched_id = Some(mid);
+                        job.done = true;
+                    }
+                    Err(err) => {
+                        job.error = Some(err);
+                        job.done = true;
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(FingerprintAuthStartResponse { job_id })
+}
+
+#[tauri::command]
+pub async fn poll_fingerprint_auth(
+    state: State<'_, AppState>,
+    job_id: String,
+    from_index: Option<usize>,
+) -> CommandResult<FingerprintAuthStatusResponse> {
+    let start = from_index.unwrap_or(0);
+    let (matched_id, done, error, next_index, lines) = {
+        let jobs = state
+            .auth_jobs
+            .lock()
+            .map_err(|_| "Could not read authentication job.".to_string())?;
+        let job = jobs
+            .get(&job_id)
+            .ok_or_else(|| "Authentication job was not found.".to_string())?;
+        let next_index = job.lines.len();
+        let lines = if start < next_index {
+            job.lines[start..].to_vec()
+        } else {
+            Vec::new()
+        };
+        (
+            job.matched_id.clone(),
+            job.done,
+            job.error.clone(),
+            next_index,
+            lines,
+        )
+    };
+
+    let employee = if done && error.is_none() {
+        if let Some(ref mid) = matched_id {
+            employee_by_id(&state.db, mid).await.map_err(to_string).ok().flatten()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let state_name = if !done {
+        "running"
+    } else if error.is_some() {
+        "failed"
+    } else {
+        "done"
+    };
+
+    Ok(FingerprintAuthStatusResponse {
+        job_id,
+        state: state_name.to_string(),
+        lines,
+        next_index,
+        error,
+        employee,
+    })
+}
+
+#[tauri::command]
+pub async fn cancel_fingerprint_auth(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> CommandResult<String> {
+    fingerprint::kill_orphaned_helpers(&state.active_helper_pids);
+    if let Ok(mut jobs) = state.auth_jobs.lock() {
+        if let Some(job) = jobs.get_mut(&job_id) {
+            if !job.done {
+                job.error = Some("Authentication cancelled.".to_string());
+                job.done = true;
+            }
+        }
+    }
+    Ok("cancelled".to_string())
 }
 
 #[tauri::command]

@@ -60,6 +60,21 @@ pub struct FingerprintEnrollStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct FingerprintAuthStartResponse {
+    pub job_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FingerprintAuthStatusResponse {
+    pub job_id: String,
+    pub state: String,
+    pub lines: Vec<String>,
+    pub next_index: usize,
+    pub error: Option<String>,
+    pub employee: Option<Employee>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct StockItem {
     pub id: i64,
     pub item_type: String,

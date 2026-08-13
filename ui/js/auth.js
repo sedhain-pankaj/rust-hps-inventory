@@ -2,6 +2,34 @@ import { escapeHtml, invoke, setBusy } from "./api.js";
 
 const modalRoot = document.getElementById("modal-root");
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mapRetryReason(reason) {
+  const lower = reason.toLowerCase();
+  if (lower.includes("center") || lower.includes("not centered"))
+    return "Finger not centered — reposition";
+  if (lower.includes("remove") || lower.includes("lift"))
+    return "Lift finger, wait for prompt, then place again";
+  if (lower.includes("short") || lower.includes("too short"))
+    return "Scan too short — keep finger steady longer";
+  if (lower.includes("fast") || lower.includes("too fast"))
+    return "Scan too fast — slow down and hold steady";
+  if (lower.includes("minutiae"))
+    return "Could not detect fingerprint details — try clean, dry finger";
+  if (lower.includes("quality") || lower.includes("poor"))
+    return "Poor scan quality — adjust pressure and angle";
+  if (lower.includes("try again"))
+    return "Scan unclear — reposition finger";
+  return reason;
+}
+
+function parseAuthLine(line) {
+  if (typeof line !== "string") return "";
+  return line.trim();
+}
+
 export function closeModal() {
   modalRoot.innerHTML = "";
   invoke("kill_fingerprint_helpers").catch(() => {});
@@ -71,27 +99,93 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
       fpIcon.classList.add("scanning");
       message.textContent = "";
       message.classList.remove("error");
+      fpStatus.textContent = "Starting scan…";
+      fpStatus.style.color = "#2c3e50";
+      fpStatus.style.background = "#eaf7ff";
       try {
-        const response = await invoke("authenticate_fingerprint", { requireAdmin });
-        aborted = true;
-        closeModal();
-        resolve(response);
+        const start = await invoke("start_fingerprint_auth", { requireAdmin });
+        let nextIndex = 0;
+        let lastRetryReason = null;
+        let scanAttempts = 0;
+
+        while (true) {
+          await wait(250);
+          if (aborted) return;
+
+          const status = await invoke("poll_fingerprint_auth", {
+            jobId: start.job_id,
+            fromIndex: nextIndex,
+          });
+          nextIndex = status.next_index ?? nextIndex;
+
+          if (Array.isArray(status.lines) && status.lines.length) {
+            for (const line of status.lines) {
+              const raw = parseAuthLine(line);
+              if (raw.startsWith("ATTEMPT|")) {
+                const parts = raw.split("|");
+                scanAttempts = parseInt(parts[1]) || scanAttempts;
+                fpStatus.textContent = `Scan attempt ${scanAttempts}/${parts[2]}: waiting for finger…`;
+                fpStatus.style.background = "#eaf7ff";
+                fpStatus.style.color = "#2c3e50";
+              } else if (raw.startsWith("RETRY|")) {
+                lastRetryReason = raw.split("|").slice(1).join("|");
+                fpStatus.textContent = `⚠ Attempt ${scanAttempts}: ${mapRetryReason(lastRetryReason)}`;
+                fpStatus.style.background = "#fff3e6";
+                fpStatus.style.color = "#c0571a";
+              } else if (raw.startsWith("ERROR|")) {
+                const err = raw.split("|").slice(1).join("|");
+                console.log("[auth] helper error:", err);
+              }
+            }
+          }
+
+          if (status.state === "done") {
+            closeModal();
+            resolve({
+              employee: status.employee,
+              source: "fingerprint",
+            });
+            return;
+          }
+          if (status.state === "failed") {
+            let reason = status.error || "Authentication failed.";
+            console.log("[auth] fingerprint job failed:", reason);
+            break;
+          }
+        }
+
+        // Job failed — increment failure counter and show reason
+        fpFailures++;
+        const displayReason = lastRetryReason
+          ? `${mapRetryReason(lastRetryReason)}`
+          : (fpStatus.textContent || "Scan failed");
+
+        if (fpFailures >= maxFpFailures) {
+          showPasswordFallback();
+          fpStatus.textContent = `${fpFailures}/5 tries failed: ${displayReason}`;
+        } else {
+          fpStatus.textContent = `${fpFailures}/5 tries failed: ${displayReason}`;
+          fpStatus.style.background = "#fff3e6";
+          fpStatus.style.color = "#c55";
+        }
+        scanning = false;
+        setTimeout(() => doFingerprintScan(), 800);
       } catch (error) {
         fpFailures++;
         let reason = "Scan failed";
         if (typeof error === "string") reason = error;
         else if (error?.message) reason = error.message;
-        else if (error?.toString && error.toString() !== "[object Object]") reason = error.toString().slice(0, 120);
-        console.log("[auth] fingerprint error:", error, "->", reason);
+        console.log("[auth] fingerprint invoke error:", error, "->", reason);
         if (fpFailures >= maxFpFailures) {
           showPasswordFallback();
           fpStatus.textContent = `${fpFailures}/5 tries failed: ${reason}`;
         } else {
           fpStatus.textContent = `${fpFailures}/5 tries failed: ${reason}`;
+          fpStatus.style.background = "#fff3e6";
           fpStatus.style.color = "#c55";
         }
         scanning = false;
-        setTimeout(() => doFingerprintScan(), 600);
+        setTimeout(() => doFingerprintScan(), 800);
       }
     };
 

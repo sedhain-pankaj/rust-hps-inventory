@@ -94,6 +94,7 @@ pub fn kill_orphaned_helpers(active_pids: &ActivePids) {
 pub async fn identify_employee(
     db: &sqlx::SqlitePool,
     paths: &AppPaths,
+    on_line: Option<Arc<dyn Fn(String) + Send + Sync>>,
     active_pids: &ActivePids,
 ) -> Result<String> {
     kill_orphaned_helpers(active_pids);
@@ -112,16 +113,20 @@ pub async fn identify_employee(
     // itself; re-spawning just poisons the device for subsequent enroll.
     let attempts = if max_attempts <= 1 { 1 } else { 1 };
     let mut last_error = None;
+    let mut last_retry = None;
+    let mut scan_attempts = 0;
 
     for _attempt in 1..=attempts {
         let helper_for_task = helper.clone();
         let storage_for_task = storage.clone();
         let source_root_for_task = paths.source_root.clone();
         let active_pids_for_task = active_pids.clone();
+        let on_line_clone = on_line.clone();
         let result = tokio::task::spawn_blocking(move || {
-            run_helper(
+            run_helper_with_events(
                 &helper_for_task,
                 &["identify".to_string(), path_string(&storage_for_task)],
+                on_line_clone.as_deref(),
                 &source_root_for_task,
                 &active_pids_for_task,
             )
@@ -135,6 +140,14 @@ pub async fn identify_employee(
                     if let Some(employee_id) = line.strip_prefix("MATCH|") {
                         clear_template_cache(&storage);
                         return Ok(employee_id.trim().to_string());
+                    }
+                    if let Some(retry_reason) = line.strip_prefix("RETRY|") {
+                        last_retry = Some(retry_reason.trim().to_string());
+                    }
+                    if let Some(attempt_info) = line.strip_prefix("ATTEMPT|") {
+                        if let Ok(n) = attempt_info.split('|').next().unwrap_or("0").parse::<usize>() {
+                            scan_attempts = n.max(scan_attempts);
+                        }
                     }
                     if line == "NO_MATCH" {
                         last_error = Some(
@@ -156,10 +169,18 @@ pub async fn identify_employee(
 
     clear_template_cache(&storage);
 
+    let base = last_error
+        .unwrap_or_else(|| "Fingerprint helper finished without a match result".to_string());
+    let detail = if scan_attempts > 0 {
+        format!(" after {} internal scan attempt(s)", scan_attempts)
+    } else {
+        format!(" after {attempts} scan attempt(s)")
+    };
+    let retry_hint = last_retry.as_ref().map(|r| format!(", last issue: {}", r)).unwrap_or_default();
+
     Err(anyhow!(
-        "{} after {attempts} scan attempt(s). Use password fallback or re-enroll the fingerprint.",
-        last_error
-            .unwrap_or_else(|| "Fingerprint helper finished without a match result".to_string())
+        "{}{}{}. Use password fallback or re-enroll the fingerprint.",
+        base, detail, retry_hint
     ))
 }
 
@@ -294,15 +315,6 @@ fn is_fatal_identify_error(message: &str) -> bool {
         || lower.contains("resource busy")
         || lower.contains("device or resource busy")
         || (lower.contains("busy") && lower.contains("[-6]"))
-}
-
-fn run_helper(
-    helper: &Path,
-    args: &[String],
-    working_dir: &Path,
-    active_pids: &ActivePids,
-) -> Result<Vec<String>> {
-    run_helper_with_events(helper, args, None, working_dir, active_pids)
 }
 
 fn run_helper_with_events(
