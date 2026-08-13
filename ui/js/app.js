@@ -122,6 +122,7 @@ function resetIdleTimer() {
   state.lastActivity = Date.now();
   state.idleTimer = setTimeout(() => {
     state.sessionLocked = true;
+    invoke("kill_fingerprint_helpers").catch(() => {});
     renderLockScreen();
   }, IDLE_TIMEOUT_MS);
 }
@@ -170,6 +171,7 @@ function endSession() {
   state.sessionLocked = false;
   stopIdleTimer();
   stopSessionTimer();
+  invoke("kill_fingerprint_helpers").catch(() => {});
 }
 
 function renderLockScreen() {
@@ -525,12 +527,33 @@ async function renderEnrollPanel() {
     const form = new FormData(event.currentTarget);
     setBusy(button);
     state.enrollmentLog = ["Starting enrollment. Follow the reader prompts."];
+    state.activeEnrollJobId = null;
+    state.enrollmentDone = false;
     renderEnrollmentLog();
     try {
       const start = await invoke("start_fingerprint_enroll", {
         employeeId: form.get("employee_id"),
         finger: form.get("finger") || "right-index",
       });
+      state.activeEnrollJobId = start.job_id;
+      // Show Cancel button inline — no re-render to avoid re-binding submit handler
+      const cancelEl = document.createElement("button");
+      cancelEl.type = "button";
+      cancelEl.className = "ghost";
+      cancelEl.setAttribute("data-cancel-enroll", "");
+      cancelEl.style.cssText = "color:#e74c3c;font-weight:600;margin-left:8px;";
+      cancelEl.textContent = "Cancel";
+      const jobIdForCancel = start.job_id;
+      cancelEl.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await invoke("cancel_fingerprint_enroll", { jobId: jobIdForCancel });
+        state.enrollmentDone = true;
+        renderEnrollPanel();
+      });
+      button.disabled = true;
+      button.textContent = "Enrolling...";
+      button.parentNode.insertBefore(cancelEl, button.nextSibling);
       let nextIndex = 0;
       while (true) {
         await wait(250);
@@ -545,17 +568,19 @@ async function renderEnrollPanel() {
         }
         if (status.state === "done") {
           state.selectedEmployee = status.employee || state.selectedEmployee;
+          state.enrollmentDone = true;
           break;
         }
         if (status.state === "failed") {
+          state.enrollmentDone = true;
           throw new Error(status.error || "Enrollment failed.");
         }
       }
-      renderEnrollPanel();
+      if (state.adminView === "enroll") renderEnrollPanel();
     } catch (error) {
       state.enrollmentLog = [String(error.message || error)];
       renderEnrollmentLog();
-      renderEnrollPanel();
+      if (state.adminView === "enroll") renderEnrollPanel();
     } finally {
       setBusy(button, false);
     }

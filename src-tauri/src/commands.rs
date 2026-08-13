@@ -549,6 +549,17 @@ pub async fn start_fingerprint_enroll(
             }
         });
 
+        // Check cancellation before starting enrollment
+        {
+            let guard = jobs.lock().unwrap();
+            if let Some(job) = guard.get(&job_id_for_task) {
+                if job.done {
+                    fingerprint::kill_orphaned_helpers(&active_pids);
+                    return;
+                }
+            }
+        }
+
         let result = fingerprint::enroll_employee(
             &db,
             &paths,
@@ -559,8 +570,12 @@ pub async fn start_fingerprint_enroll(
         )
         .await;
 
+        // Only update job state if it hasn't been cancelled by another thread
         if let Ok(mut all_jobs) = jobs.lock() {
             if let Some(job) = all_jobs.get_mut(&job_id_for_task) {
+                if job.done {
+                    return;
+                }
                 match result {
                     Ok(messages) => {
                         if !messages.is_empty() {
@@ -632,6 +647,30 @@ pub async fn poll_fingerprint_enroll(
         error,
         employee,
     })
+}
+
+#[tauri::command]
+pub fn cancel_fingerprint_enroll(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> CommandResult<()> {
+    fingerprint::kill_orphaned_helpers(&state.active_helper_pids);
+    if let Ok(mut jobs) = state.enroll_jobs.lock() {
+        if let Some(job) = jobs.get_mut(&job_id) {
+            if !job.done {
+                job.lines.push("Enrollment cancelled by user.".to_string());
+                job.error = Some("Cancelled".to_string());
+                job.done = true;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn kill_fingerprint_helpers(state: State<'_, AppState>) -> CommandResult<()> {
+    fingerprint::kill_orphaned_helpers(&state.active_helper_pids);
+    Ok(())
 }
 
 #[tauri::command]

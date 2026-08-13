@@ -32,6 +32,8 @@ pub fn run() {
             authenticate_fingerprint,
             start_fingerprint_enroll,
             poll_fingerprint_enroll,
+            cancel_fingerprint_enroll,
+            kill_fingerprint_helpers,
             read_fingerprint_progress,
             clear_fingerprint_progress,
             list_stock_items,

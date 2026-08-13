@@ -4,6 +4,7 @@ const modalRoot = document.getElementById("modal-root");
 
 export function closeModal() {
   modalRoot.innerHTML = "";
+  invoke("kill_fingerprint_helpers").catch(() => {});
 }
 
 export function requestAuth({ title, requireAdmin = false, employee = null }) {
@@ -13,6 +14,7 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
     const maxFpFailures = 5;
     let passwordVisible = false;
     let scanning = false;
+    let aborted = false;
 
     modalRoot.innerHTML = `
       <div class="modal-backdrop">
@@ -64,22 +66,28 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
     };
 
     const doFingerprintScan = async () => {
-      if (scanning) return;
+      if (scanning || aborted) return;
       scanning = true;
       fpIcon.classList.add("scanning");
       message.textContent = "";
       message.classList.remove("error");
       try {
         const response = await invoke("authenticate_fingerprint", { requireAdmin });
+        aborted = true;
         closeModal();
         resolve(response);
       } catch (error) {
         fpFailures++;
+        let reason = "Scan failed";
+        if (typeof error === "string") reason = error;
+        else if (error?.message) reason = error.message;
+        else if (error?.toString && error.toString() !== "[object Object]") reason = error.toString().slice(0, 120);
+        console.log("[auth] fingerprint error:", error, "->", reason);
         if (fpFailures >= maxFpFailures) {
           showPasswordFallback();
-          fpStatus.textContent = `${fpFailures}/5 tries failed — try again.`;
+          fpStatus.textContent = `${fpFailures}/5 tries failed: ${reason}`;
         } else {
-          fpStatus.textContent = `${fpFailures}/5 tries failed — try again.`;
+          fpStatus.textContent = `${fpFailures}/5 tries failed: ${reason}`;
           fpStatus.style.color = "#c55";
         }
         scanning = false;
@@ -88,6 +96,8 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
     };
 
     closeButton.addEventListener("click", () => {
+      aborted = true;
+      scanning = false;
       closeModal();
       reject(new Error("Authentication cancelled."));
     });
@@ -102,6 +112,7 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
           password: passwordInput.value,
           requireAdmin,
         });
+        aborted = true;
         closeModal();
         resolve(response);
       } catch (error) {
