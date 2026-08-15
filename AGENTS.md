@@ -29,8 +29,9 @@ The fingerprint stack is shared via the C helper binary:
 ### Persistence
 - SQLite DB: `hps.db` (repo root)
 - Fingerprint temp/cache files: `data/fingerprints/`
-  - Enrollment writes `<employee_id>.fpdata`, then persists to SQLite, then removes temp file.
+  - Enrollment writes `<employee_id>-<N>.fpdata` (3 templates per finger), persists to SQLite, removes temp files.
   - Identify exports templates from SQLite to `data/fingerprints/`, then clears cache after scan.
+- `fingerprint_templates` table: one row per `(employee_id, finger, template_index)`. Multi-template enrollment stores 3 templates per finger for higher match accuracy.
 
 ---
 
@@ -48,8 +49,51 @@ The fingerprint stack is shared via the C helper binary:
   - `ENROLLED|...`
   - `MATCH|...`
   - `NO_MATCH`
+  - `TEMPLATE|N|total` (multi-template enrollment: which template is being captured)
+  - `ATTEMPT|N|3|waiting` (identify: which scan attempt is in progress)
 
 Only these protocol lines are consumed by Rust from helper output.
+
+---
+
+## Fingerprint Matching Algorithm (SIGFM)
+
+The CS9711 driver uses the **SIGFM** algorithm (`libfprint/sigfm/sigfm.cpp`) — a SIFT-based
+minutiae matcher. Understanding its parameters is essential for tuning accuracy.
+
+### How matching works
+1. **Keypoint extraction**: SIFT detects keypoints + descriptors in the live scan image.
+2. **Ratio test**: A keypoint match is accepted only if `best_distance < distance_match × second_best_distance`.
+3. **Geometric consistency**: For all matched keypoint pairs, vector lengths must agree within `length_match` (5%) and angles within `angle_match` (5%).
+4. **Score**: Count of consistent angle pairs. Must be ≥ `score_threshold` to be a match.
+
+### Tunable parameters (current values)
+
+| Parameter | File | Value | Effect |
+|---|---|---|---|
+| `score_threshold` | `cs9711.c` | **24** | Min consistent angle pairs. Lower = more lenient. Default was 40 (too strict for press-type sensor). |
+| `distance_match` | `sigfm.cpp` | **0.80** | Ratio test threshold. Higher = accepts more borderline keypoints. Default was 0.75. |
+| `length_match` | `sigfm.cpp` | 0.05 | Geometric length tolerance. |
+| `angle_match` | `sigfm.cpp` | 0.05 | Geometric angle tolerance. |
+| `min_match` | `sigfm.cpp` | 5 | Min keypoints required before scoring. |
+
+### Why threshold 40 failed
+With threshold 40, the algorithm needs **10+ SIFT keypoints** with near-perfect geometric
+consistency. A press-type sensor shifts the finger 1–2 mm between scans, breaking angle
+consistency for a few keypoints and dropping the score below 40. Threshold 24 requires only
+**8+ consistent keypoints** — still secure (SIFT keypoints are unique per fingerprint) but
+robust to minor position drift.
+
+### Multi-template enrollment
+Instead of storing 1 template per finger, we store **3**. Each enrollment run captures a
+slightly different set of SIFT keypoints. During identify, the gallery contains all 3
+templates per employee — if ANY matches, the employee is recognized. This compounds the
+accuracy gain from the threshold change.
+
+- Helper command: `enroll-multi <storage> <employee_id> <finger> 3`
+- Runs 3 enrollment cycles (15 stages each) in a single device session (avoids USB open/close issues)
+- Produces `<id>-1.fpdata`, `<id>-2.fpdata`, `<id>-3.fpdata`
+- Rust strips the `-{index}` suffix from `MATCH|<id>-<N>` to get the real employee_id
 
 ---
 
@@ -68,6 +112,14 @@ This model avoids relying on a single long blocking `invoke()` for live progress
 `AppState` tracks:
 - `enroll_jobs` (job map for background enrollment)
 - `enroll_job_seq` (job ID counter)
+- `auth_jobs` (job map for background identification)
+- `auth_job_seq` (job ID counter)
+
+### Auth (polled, same pattern as enrollment)
+1. `start_fingerprint_auth()` → returns `job_id`
+2. `poll_fingerprint_auth(jobId, fromIndex)` → incremental lines + state
+3. UI shows live scan-quality feedback (attempt N/3, retry reasons) via `ATTEMPT|` and `RETRY|` lines
+4. On success resolves `{ employee, source: "fingerprint" }` — same shape as password auth
 
 ---
 
@@ -115,8 +167,23 @@ cargo build --release
 
 Direct helper smoke test:
 ```bash
+# Single template (legacy)
 LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
   libfprint-CS9711/build/examples/employee-clock-helper enroll /tmp/fp-test EMP001 right-index
+
+# Multi-template (3 templates, current default)
+LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
+  libfprint-CS9711/build/examples/employee-clock-helper enroll-multi /tmp/fp-test EMP001 right-index 3
+
+# Identify
+LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
+  libfprint-CS9711/build/examples/employee-clock-helper identify /tmp/fp-test
+```
+
+Rebuild helper after C changes:
+```bash
+cd libfprint-CS9711/build
+ninja -j$(nproc)
 ```
 
 ---

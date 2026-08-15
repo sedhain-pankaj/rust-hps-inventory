@@ -229,6 +229,20 @@ label {
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: background 0.3s, color 0.3s, border-color 0.3s;
+}
+
+.status-pill.warn {
+  background: #fff3cd;
+  border-color: #ffc107;
+  color: #664d03;
+}
+
+.status-pill.danger {
+  background: #f8d7da;
+  border-color: #dc3545;
+  color: #842029;
+  animation: pulse 1s ease-in-out infinite;
 }
 
 .role-grid,
@@ -538,30 +552,9 @@ label {
   color: #666;
 }
 
-/* Lock screen overlay */
-.lock-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  cursor: pointer;
-}
-
-.lock-overlay .lock-prompt {
-  margin-top: 3vh;
-  font-size: 1.5rem;
-  color: var(--muted);
-  letter-spacing: 0.05em;
-  animation: pulse 2s ease-in-out infinite;
-}
-
 @keyframes pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  50% { opacity: 0.5; }
 }
 
 /* Auth fingerprint icon */

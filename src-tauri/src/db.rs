@@ -177,19 +177,79 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
     .execute(db)
     .await?;
 
-    sqlx::query(
+    // Migrate fingerprint_templates from single-template (employee_id PK) to
+    // multi-template (composite unique key with template_index).
+    let has_template_index: bool = sqlx::query_scalar(
         r#"
-        CREATE TABLE IF NOT EXISTS fingerprint_templates (
-            employee_id TEXT PRIMARY KEY,
-            finger TEXT NOT NULL,
-            template BLOB NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
-        );
+        SELECT COUNT(*) > 0 FROM pragma_table_info('fingerprint_templates')
+        WHERE name = 'template_index'
         "#,
     )
-    .execute(db)
-    .await?;
+    .fetch_one(db)
+    .await
+    .unwrap_or(false);
+
+    if !has_template_index {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS fingerprint_templates_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id TEXT NOT NULL,
+                finger TEXT NOT NULL,
+                template_index INTEGER NOT NULL DEFAULT 1,
+                template BLOB NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (employee_id, finger, template_index),
+                FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(db)
+        .await?;
+
+        // Copy existing rows (old schema: employee_id PK, no template_index)
+        let old_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fingerprint_templates")
+            .fetch_one(db)
+            .await
+            .unwrap_or(0);
+        if old_count > 0 {
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO fingerprint_templates_new
+                    (employee_id, finger, template_index, template, updated_at)
+                SELECT employee_id, finger, 1, template, updated_at
+                FROM fingerprint_templates
+                "#,
+            )
+            .execute(db)
+            .await?;
+        }
+
+        sqlx::query("DROP TABLE IF EXISTS fingerprint_templates")
+            .execute(db)
+            .await?;
+        sqlx::query("ALTER TABLE fingerprint_templates_new RENAME TO fingerprint_templates")
+            .execute(db)
+            .await?;
+    } else {
+        // Fresh install or already migrated — ensure table exists with new schema
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS fingerprint_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_id TEXT NOT NULL,
+                finger TEXT NOT NULL,
+                template_index INTEGER NOT NULL DEFAULT 1,
+                template BLOB NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (employee_id, finger, template_index),
+                FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(db)
+        .await?;
+    }
 
     sqlx::query(
         r#"
@@ -817,10 +877,9 @@ async fn import_legacy_fingerprints_if_present(db: &SqlitePool, paths: &AppPaths
         };
         sqlx::query(
             r#"
-            INSERT INTO fingerprint_templates (employee_id, finger, template, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(employee_id) DO UPDATE SET
-                finger = excluded.finger,
+            INSERT INTO fingerprint_templates (employee_id, finger, template_index, template, updated_at)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(employee_id, finger, template_index) DO UPDATE SET
                 template = excluded.template,
                 updated_at = excluded.updated_at
             "#,

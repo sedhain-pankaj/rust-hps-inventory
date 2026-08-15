@@ -140,6 +140,14 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
           }
 
           if (status.state === "done") {
+            if (employee && status.employee.id !== employee.id) {
+              fpStatus.textContent = `Wrong fingerprint — this session is for ${employee.name}`;
+              fpStatus.style.background = "#f8d7da";
+              fpStatus.style.color = "#842029";
+              scanning = false;
+              setTimeout(() => doFingerprintScan(), 1500);
+              return;
+            }
             closeModal();
             resolve({
               employee: status.employee,

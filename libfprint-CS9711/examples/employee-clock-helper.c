@@ -176,17 +176,51 @@ save_print (FpPrint    *print,
   return TRUE;
 }
 
+static gboolean
+run_enroll_cycle (FpDevice      *device,
+                  FpFinger       finger,
+                  const char    *employee_id,
+                  const char    *save_path)
+{
+  g_autoptr(GError) error = NULL;
+  g_autoptr(FpPrint) template_print = NULL;
+  g_autoptr(FpPrint) enrolled_print = NULL;
+
+  template_print = fp_print_new (device);
+  fp_print_set_finger (template_print, finger);
+  fp_print_set_username (template_print, employee_id);
+  fp_print_set_description (template_print, employee_id);
+  set_enroll_date (template_print);
+
+  enrolled_print = fp_device_enroll_sync (device, template_print, NULL, enroll_progress_cb, NULL, &error);
+  if (!enrolled_print)
+    {
+      print_line ("ERROR", error ? error->message : "Enrollment failed.");
+      return FALSE;
+    }
+
+  fp_print_set_username (enrolled_print, employee_id);
+  fp_print_set_description (enrolled_print, employee_id);
+  set_enroll_date (enrolled_print);
+
+  if (!save_print (enrolled_print, save_path, &error))
+    {
+      print_line ("ERROR", error->message);
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
 static int
 enroll_employee (const char *storage_dir,
-                 const char *employee_id,
-                 const char *finger_name)
+                  const char *employee_id,
+                  const char *finger_name)
 {
   g_autoptr(FpContext) context = NULL;
   g_autoptr(GError) error = NULL;
-  g_autoptr(FpPrint) enrolled_print = NULL;
   g_autofree gchar *path = NULL;
   FpDevice *device;
-  FpPrint *template_print;
   FpFinger finger;
 
   if (!valid_employee_id (employee_id))
@@ -227,34 +261,94 @@ enroll_employee (const char *storage_dir,
   g_print ("ENROLL_STAGES|%d\n", fp_device_get_nr_enroll_stages (device));
   print_line ("READY", "enroll");
 
-  template_print = fp_print_new (device);
-  fp_print_set_finger (template_print, finger);
-  fp_print_set_username (template_print, employee_id);
-  fp_print_set_description (template_print, employee_id);
-  set_enroll_date (template_print);
-
-  enrolled_print = fp_device_enroll_sync (device, template_print, NULL, enroll_progress_cb, NULL, &error);
-  if (!enrolled_print)
-    {
-      print_line ("ERROR", error ? error->message : "Enrollment failed.");
-      safe_close_device (device);
-      return 1;
-    }
-
-  fp_print_set_username (enrolled_print, employee_id);
-  fp_print_set_description (enrolled_print, employee_id);
-  set_enroll_date (enrolled_print);
-
   path = print_path_for_employee (storage_dir, employee_id);
-  if (!save_print (enrolled_print, path, &error))
+  if (!run_enroll_cycle (device, finger, employee_id, path))
     {
-      print_line ("ERROR", error->message);
       safe_close_device (device);
       return 1;
     }
 
   safe_close_device (device);
   g_print ("ENROLLED|%s|%s\n", employee_id, path);
+  fflush (stdout);
+  return 0;
+}
+
+static int
+enroll_employee_multi (const char *storage_dir,
+                       const char *employee_id,
+                       const char *finger_name,
+                       int         templates)
+{
+  g_autoptr(FpContext) context = NULL;
+  g_autoptr(GError) error = NULL;
+  FpDevice *device;
+  FpFinger finger;
+  int i;
+
+  if (!valid_employee_id (employee_id))
+    {
+      print_line ("ERROR", "Invalid employee ID.");
+      return 1;
+    }
+
+  finger = parse_finger (finger_name);
+  if (finger == FP_FINGER_UNKNOWN)
+    {
+      print_line ("ERROR", "Unknown finger name.");
+      return 1;
+    }
+
+  if (templates < 1)
+    templates = 1;
+  if (templates > 5)
+    templates = 5;
+
+  if (g_mkdir_with_parents (storage_dir, 0700) != 0)
+    {
+      print_line ("ERROR", g_strerror (errno));
+      return 1;
+    }
+
+  context = fp_context_new ();
+  device = find_device (context);
+  if (!device)
+    {
+      print_line ("ERROR", "No fingerprint reader detected.");
+      return 1;
+    }
+
+  report_device (device);
+
+  if (!fp_device_open_sync (device, NULL, &error))
+    {
+      print_line ("ERROR", error->message);
+      return 1;
+    }
+
+  g_print ("ENROLL_STAGES|%d\n", fp_device_get_nr_enroll_stages (device));
+  print_line ("READY", "enroll");
+
+  for (i = 1; i <= templates; i++)
+    {
+      g_autofree gchar *suffixed_id = NULL;
+      g_autofree gchar *path = NULL;
+
+      suffixed_id = g_strdup_printf ("%s-%d", employee_id, i);
+      path = print_path_for_employee (storage_dir, suffixed_id);
+
+      g_print ("TEMPLATE|%d|%d\n", i, templates);
+      fflush (stdout);
+
+      if (!run_enroll_cycle (device, finger, suffixed_id, path))
+        {
+          safe_close_device (device);
+          return 1;
+        }
+    }
+
+  safe_close_device (device);
+  g_print ("ENROLLED|%s|%d\n", employee_id, templates);
   fflush (stdout);
   return 0;
 }
@@ -481,6 +575,7 @@ usage (const char *program)
 {
   g_printerr ("Usage:\n");
   g_printerr ("  %s enroll <storage-dir> <employee-id> <finger>\n", program);
+  g_printerr ("  %s enroll-multi <storage-dir> <employee-id> <finger> [templates]\n", program);
   g_printerr ("  %s identify <storage-dir>\n", program);
 }
 
@@ -497,6 +592,23 @@ main (int argc, char **argv)
           return 1;
         }
       return enroll_employee (argv[2], argv[3], argv[4]);
+    }
+
+  if (argc >= 2 && g_strcmp0 (argv[1], "enroll-multi") == 0)
+    {
+      int templates = 3;
+      if (argc >= 6)
+        {
+          templates = atoi (argv[5]);
+          if (templates < 1)
+            templates = 3;
+        }
+      if (argc < 5)
+        {
+          usage (argv[0]);
+          return 1;
+        }
+      return enroll_employee_multi (argv[2], argv[3], argv[4], templates);
     }
 
   if (argc >= 2 && g_strcmp0 (argv[1], "identify") == 0)

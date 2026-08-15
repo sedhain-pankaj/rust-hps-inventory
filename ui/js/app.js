@@ -30,7 +30,6 @@ const state = {
   // Session management
   sessionUser: null,
   sessionRole: null,
-  sessionLocked: false,
   idleTimer: null,
 };
 
@@ -91,8 +90,8 @@ let clockTimer = null;
 let sessionTimer = null;
 function tickClock() {
   if (clockTimer) clearInterval(clockTimer);
-  const timeNode = app.querySelector("[data-time]") || app.querySelector("[data-lock-time]");
-  const dateNode = app.querySelector("[data-date]") || app.querySelector("[data-lock-date]");
+  const timeNode = app.querySelector("[data-time]");
+  const dateNode = app.querySelector("[data-date]");
   const update = () => {
     const now = new Date();
     if (timeNode) {
@@ -118,12 +117,11 @@ const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function resetIdleTimer() {
   if (state.idleTimer) clearTimeout(state.idleTimer);
-  if (!state.sessionUser || state.sessionLocked) return;
+  if (!state.sessionUser) return;
   state.lastActivity = Date.now();
   state.idleTimer = setTimeout(() => {
-    state.sessionLocked = true;
-    invoke("kill_fingerprint_helpers").catch(() => {});
-    renderLockScreen();
+    endSession();
+    renderHome();
   }, IDLE_TIMEOUT_MS);
 }
 
@@ -138,7 +136,7 @@ function startSessionTimer() {
   if (sessionTimer) clearInterval(sessionTimer);
   sessionTimer = setInterval(() => {
     const pill = app.querySelector("[data-status-pill]");
-    if (!pill || !state.sessionUser || state.sessionLocked || !state.lastActivity) return;
+    if (!pill || !state.sessionUser || !state.lastActivity) return;
     const elapsed = Date.now() - state.lastActivity;
     const remaining = Math.max(0, IDLE_TIMEOUT_MS - elapsed);
     const mins = Math.floor(remaining / 60000);
@@ -147,6 +145,13 @@ function startSessionTimer() {
     pill.dataset.remaining = timeStr;
     const remainingEl = app.querySelector("[data-session-remaining]");
     if (remainingEl) remainingEl.textContent = `· ${timeStr}`;
+    const totalSecs = Math.floor(remaining / 1000);
+    pill.classList.remove("warn", "danger");
+    if (totalSecs <= 10) {
+      pill.classList.add("danger");
+    } else if (totalSecs <= 60) {
+      pill.classList.add("warn");
+    }
   }, 1000);
 }
 
@@ -160,7 +165,6 @@ function stopSessionTimer() {
 function startSession(user, role) {
   state.sessionUser = user;
   state.sessionRole = role;
-  state.sessionLocked = false;
   resetIdleTimer();
   startSessionTimer();
 }
@@ -168,58 +172,9 @@ function startSession(user, role) {
 function endSession() {
   state.sessionUser = null;
   state.sessionRole = null;
-  state.sessionLocked = false;
   stopIdleTimer();
   stopSessionTimer();
   invoke("kill_fingerprint_helpers").catch(() => {});
-}
-
-function renderLockScreen() {
-  stopIdleTimer();
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-  const day = now.toLocaleDateString("en-AU", { weekday: "long" });
-  const dd = String(now.getDate()).padStart(2, "0");
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dateStr = `${dd}/${mm}/${now.getFullYear()} ${day}`;
-
-  app.innerHTML = `
-    <div class="lock-overlay" data-unlock-tap>
-      <div class="clock-face">
-        <div class="clock-time" data-lock-time>${timeStr}</div>
-        <div class="clock-date" data-lock-date>${dateStr}</div>
-      </div>
-      <div class="lock-prompt">Tap anywhere to unlock</div>
-    </div>
-  `;
-
-  tickClock();
-
-  app.querySelector("[data-unlock-tap]").addEventListener("click", async () => {
-    if (!state.sessionUser) {
-      renderHome();
-      return;
-    }
-    app.innerHTML = "";
-    try {
-      const requireAdmin = state.sessionRole === "admin";
-      const response = await requestAuth({
-        title: "Unlock",
-        requireAdmin,
-        employee: state.sessionUser,
-      });
-      state.sessionLocked = false;
-      if (state.sessionRole === "admin") {
-        state.admin = response.employee;
-        renderAdmin();
-      } else {
-        state.currentStaff = response.employee;
-        renderStaffDashboard();
-      }
-    } catch {
-      renderLockScreen();
-    }
-  });
 }
 
 document.addEventListener("click", resetIdleTimer);
@@ -597,6 +552,13 @@ async function renderEnrollPanel() {
             } else if (raw.startsWith("READY|")) {
               if (scanStatus && !lastQuality) {
                 scanStatus.textContent = "Scanner ready — place your finger now";
+                scanStatus.style.background = "#eaf7ff";
+                scanStatus.style.color = "#2c3e50";
+              }
+            } else if (raw.startsWith("TEMPLATE|")) {
+              const [, num, total] = raw.split("|");
+              if (scanStatus) {
+                scanStatus.textContent = `Enrolling template ${num} of ${total} — place your finger`;
                 scanStatus.style.background = "#eaf7ff";
                 scanStatus.style.color = "#2c3e50";
               }
@@ -1862,6 +1824,10 @@ function formatFingerprintLine(line) {
   }
   if (line.startsWith("ENROLL_STAGES|")) {
     return `Reader requires ${line.split("|")[1]} enrollment stages`;
+  }
+  if (line.startsWith("TEMPLATE|")) {
+    const [, num, total] = line.split("|");
+    return `Enrolling template ${num} of ${total}`;
   }
   if (line.startsWith("DEVICE|")) {
     const [, name, driver, id] = line.split("|");
