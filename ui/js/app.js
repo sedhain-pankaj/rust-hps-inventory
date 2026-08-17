@@ -1744,6 +1744,7 @@ const tabIcons = {
   time: "clock",
   logs: "list",
   database: "database",
+  clock: "clock",
   cornice: "box",
   moulds: "layers",
   production: "gauge",
