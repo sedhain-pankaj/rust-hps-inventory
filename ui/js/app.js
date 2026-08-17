@@ -1731,6 +1731,27 @@ function screenShell(title, subtitle, content, contentClass = "") {
   `;
 }
 
+const tabIcons = {
+  alerts: "bell",
+  employees: "users",
+  enroll: "fingerprint",
+  payroll: "dollar",
+  dispatch: "truck",
+  cornice_stock: "box",
+  mould_inventory: "layers",
+  stock: "box",
+  rates: "gauge",
+  time: "clock",
+  logs: "list",
+  database: "database",
+  cornice: "box",
+  moulds: "layers",
+  production: "gauge",
+  deliveries: "truck",
+  cornice_stock_ro: "box",
+  overstock: "box",
+};
+
 function workspaceShell(title, subtitle, tabs, active) {
   return `
     <section class="screen">
@@ -1741,7 +1762,7 @@ function workspaceShell(title, subtitle, tabs, active) {
             .map(
               ([id, label]) => `
                 <button data-tab="${id}" class="${active === id ? "active" : ""}">
-                  ${escapeHtml(label)}
+                  ${icon(tabIcons[id] || "list")}${escapeHtml(label)}
                 </button>
               `,
             )
@@ -1760,7 +1781,7 @@ function topbar(title, subtitle) {
   const logo = state.logoDataUrl || "./assets/HPS.png";
   return `
     <header class="topbar">
-      <button class="icon ghost" data-back title="Back"><img src="./assets/noun-arrow-back-2352160.svg" alt="Back" width="24" height="24" /></button>
+      <button class="icon ghost" data-back title="Back">${icon("back-arrow")}</button>
       <div class="brand">
         <img src="${logo}" alt="" />
         <div class="title">
@@ -1769,7 +1790,8 @@ function topbar(title, subtitle) {
         </div>
       </div>
       <div class="status-pill" data-status-pill title="${escapeHtml(state.status?.database_path || "")}">
-        Session Timer<span data-session-remaining></span>
+        ${icon("clock", 16)}
+        <span>Session<span data-session-remaining></span></span>
       </div>
     </header>
   `;
@@ -1784,25 +1806,28 @@ function setPanel(title, actions, body) {
 function table(headers, rows) {
   if (!rows.length) return `<div class="message">No records</div>`;
   return `
-    <table class="table">
-      <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
-      <tbody>
-        ${rows
-          .map(
-            (row) => `
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows
+            .map(
+              (row) => `
               <tr class="${row.review ? "review" : ""} ${row.clickable ? "clickable" : ""}" ${row.attrs || ""}>
                 ${row.cells.map((cell) => `<td>${cellLooksHtml(cell) ? cell : escapeHtml(cell)}</td>`).join("")}
               </tr>
             `,
-          )
-          .join("")}
-      </tbody>
-    </table>
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
 function cellLooksHtml(value) {
-  return typeof value === "string" && value.trim().startsWith("<button");
+  const v = typeof value === "string" ? value.trim() : "";
+  return v.startsWith("<button") || v.startsWith('<span class="tag');
 }
 
 function fingerOptions(selected = "right-index") {
