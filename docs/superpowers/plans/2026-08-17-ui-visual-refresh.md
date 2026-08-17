@@ -1447,7 +1447,7 @@ grep -n 'tile-icon\|class="avatar"' ui/js/app.js
 grep -n 'import { icon } from "./icons.js"' ui/js/app.js
 ! grep -n 'data-time>' ui/js/app.js
 ```
-Expected: first three greps each print matches (2, 4, 1 lines); the last grep prints nothing (old `data-time` attribute gone).
+Expected: first three greps each print matches (3, 4, 1 lines); the last grep prints nothing (old `data-time` attribute gone).
 
 - [ ] **Step 7: Visual check (user)**
 
@@ -1569,6 +1569,7 @@ const tabIcons = {
   time: "clock",
   logs: "list",
   database: "database",
+  clock: "clock",
   cornice: "box",
   moulds: "layers",
   production: "gauge",
