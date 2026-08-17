@@ -7,6 +7,7 @@ import {
   weekStartIso,
 } from "./api.js";
 import { chooseClockAction, requestAuth } from "./auth.js";
+import { icon } from "./icons.js";
 
 const app = document.getElementById("app");
 
@@ -73,10 +74,12 @@ function lockKioskKeys() {
 }
 
 function renderHome() {
+  const logo = state.logoDataUrl || "./assets/HPS.png";
   app.innerHTML = `
     <section class="home">
       <div class="clock-face">
-        <div class="clock-time" data-time>00:00:00</div>
+        <img class="clock-logo" src="${logo}" alt="HPS" />
+        <div class="clock-time"><span data-time-main>00:00:</span><span class="secs" data-time-secs>00</span></div>
         <div class="clock-date" data-date>00/00/0000 Monday</div>
       </div>
       <button class="primary start-button" data-start>Start</button>
@@ -90,17 +93,20 @@ let clockTimer = null;
 let sessionTimer = null;
 function tickClock() {
   if (clockTimer) clearInterval(clockTimer);
-  const timeNode = app.querySelector("[data-time]");
+  const timeMain = app.querySelector("[data-time-main]");
+  const timeSecs = app.querySelector("[data-time-secs]");
   const dateNode = app.querySelector("[data-date]");
   const update = () => {
     const now = new Date();
-    if (timeNode) {
-      timeNode.textContent = now.toLocaleTimeString("en-AU", {
+    if (timeMain || timeSecs) {
+      const t = now.toLocaleTimeString("en-AU", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
         hour12: false,
       });
+      if (timeMain) timeMain.textContent = `${t.slice(0, 5)}:`;
+      if (timeSecs) timeSecs.textContent = t.slice(6, 8);
     }
     if (dateNode) {
       const day = now.toLocaleDateString("en-AU", { weekday: "long" });
@@ -191,9 +197,9 @@ function renderRoleMenu() {
     "Choose Access",
     "Hopkins Plaster Studio",
     `
-      <button class="role-tile" data-role="admin"><strong>Admin</strong><span>Full control</span></button>
-      <button class="role-tile" data-role="staff"><strong>Staff</strong><span>Clocking and daily logs</span></button>
-      <button class="role-tile brochure-disabled" disabled title="Coming soon"><strong>Brochure</strong><span>Coming soon</span></button>
+      <button class="role-tile" data-role="admin"><span class="tile-icon">${icon("shield")}</span><strong>Admin</strong><span>Full control</span></button>
+      <button class="role-tile" data-role="staff"><span class="tile-icon">${icon("user")}</span><strong>Staff</strong><span>Clocking and daily logs</span></button>
+      <button class="role-tile brochure-disabled" disabled title="Coming soon"><span class="tile-icon">${icon("book")}</span><strong>Brochure</strong><span>Coming soon</span></button>
     `,
     "role-grid",
   );
@@ -229,14 +235,21 @@ async function renderStaffPicker() {
     "Staff",
     "Choose your name",
     state.staff
-      .map(
-        (employee) => `
+      .map((employee) => {
+        const initials = employee.name
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((word) => word[0].toUpperCase())
+          .join("");
+        return `
         <button class="staff-tile" data-employee="${escapeHtml(employee.id)}">
+          <span class="avatar">${escapeHtml(initials)}</span>
           <strong>${escapeHtml(employee.name)}</strong>
           <span>${escapeHtml(employee.id)}</span>
         </button>
-      `,
-      )
+      `;
+      })
       .join(""),
     "staff-grid",
   );
