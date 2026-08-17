@@ -473,7 +473,7 @@ async function renderEnrollPanel() {
             : `<div>Ready to enroll.</div>`
         }
       </div>
-      <div id="enroll-scan-status" class="message" style="display:none;margin-top:0.5em;padding:0.5em 0.75em;border-radius:4px;font-size:0.9em;text-align:center;"></div>
+      <div id="enroll-scan-status" class="scan-status" style="display:none"></div>
       ${table(
         ["Name", "ID", "Admin", "Password", "Fingerprint"],
         employees.map((employee) => ({
@@ -508,9 +508,8 @@ async function renderEnrollPanel() {
       // Show Cancel button inline — no re-render to avoid re-binding submit handler
       const cancelEl = document.createElement("button");
       cancelEl.type = "button";
-      cancelEl.className = "ghost";
+      cancelEl.className = "ghost cancel-text";
       cancelEl.setAttribute("data-cancel-enroll", "");
-      cancelEl.style.cssText = "color:#e74c3c;font-weight:600;margin-left:8px;";
       cancelEl.textContent = "Cancel";
       const jobIdForCancel = start.job_id;
       cancelEl.addEventListener("click", async (event) => {
@@ -528,9 +527,8 @@ async function renderEnrollPanel() {
       let lastQuality = null;
       if (scanStatus) {
         scanStatus.style.display = "";
+        scanStatus.className = "scan-status info";
         scanStatus.textContent = "Place your finger on the scanner...";
-        scanStatus.style.background = "#eaf7ff";
-        scanStatus.style.color = "#2c3e50";
       }
       let nextIndex = 0;
       while (true) {
@@ -550,30 +548,26 @@ async function renderEnrollPanel() {
               lastQuality = "retry";
               const reason = raw.split("|").slice(1).join("|");
               if (scanStatus) {
+                scanStatus.className = "scan-status warn";
                 scanStatus.textContent = `Attempt ${enrollAttempts}: ${mapRetryReason(reason)}`;
-                scanStatus.style.background = "#fff3e6";
-                scanStatus.style.color = "#c0571a";
               }
             } else if (raw.startsWith("PROGRESS|")) {
               lastQuality = "good";
               const [, completed, total] = raw.split("|");
               if (scanStatus) {
+                scanStatus.className = "scan-status ok";
                 scanStatus.textContent = `✓ Good scan — stage ${completed}/${total} captured`;
-                scanStatus.style.background = "#e6fff0";
-                scanStatus.style.color = "#1a7a42";
               }
             } else if (raw.startsWith("READY|")) {
               if (scanStatus && !lastQuality) {
+                scanStatus.className = "scan-status info";
                 scanStatus.textContent = "Scanner ready — place your finger now";
-                scanStatus.style.background = "#eaf7ff";
-                scanStatus.style.color = "#2c3e50";
               }
             } else if (raw.startsWith("TEMPLATE|")) {
               const [, num, total] = raw.split("|");
               if (scanStatus) {
+                scanStatus.className = "scan-status info";
                 scanStatus.textContent = `Enrolling template ${num} of ${total} — place your finger`;
-                scanStatus.style.background = "#eaf7ff";
-                scanStatus.style.color = "#2c3e50";
               }
             }
           }
@@ -963,7 +957,7 @@ async function renderPayrollPanel() {
       <div class="metric-row">
         <div class="metric"><span>Week</span><strong>${weekStart}</strong></div>
         <div class="metric"><span>Employees</span><strong>${payrollData.length}</strong></div>
-        <div class="metric"><span>Unresolved</span><strong style="color:${unresolved.length ? '#e55' : 'inherit'}">${unresolved.length}</strong></div>
+        <div class="metric"><span>Unresolved</span><strong class="${unresolved.length ? "metric-err" : ""}">${unresolved.length}</strong></div>
       </div>
     `;
 
@@ -982,7 +976,7 @@ async function renderPayrollPanel() {
             `$${p.base_pay.toFixed(2)}`,
             `$${p.extra_unit_pay.toFixed(2)}`,
             p.gross_pay !== null && p.gross_pay !== undefined ? `$${p.gross_pay.toFixed(2)}` : `<em>unresolved</em>`,
-            `<span style="color:${p.status === 'final' ? '#5a5' : p.status === 'unresolved' ? '#e55' : '#da5'}">${escapeHtml(p.status)}</span>`,
+            `<span class="tag ${p.status === 'final' ? 'tag-ok' : p.status === 'unresolved' ? 'tag-err' : 'tag-warn'}">${escapeHtml(p.status)}</span>`,
             p.status === "review"
               ? `<button data-proration-accept emp="${escapeHtml(p.employee_id)}" week="${escapeHtml(p.week_start)}">Accept Prorated</button> <button data-proration-override emp="${escapeHtml(p.employee_id)}" week="${escapeHtml(p.week_start)}">Use Standard 180</button>`
               : "",
@@ -1195,7 +1189,7 @@ async function renderDispatchOrdersPanel() {
             o.cornice_model,
             o.quantity,
             o.delivery_location,
-            `<span style="color:${o.status === 'delivered' ? '#5a5' : o.status === 'pending' ? '#e55' : '#da5'}">${escapeHtml(o.status)}</span>`,
+            `<span class="tag ${o.status === 'delivered' ? 'tag-ok' : o.status === 'pending' ? 'tag-err' : 'tag-warn'}">${escapeHtml(o.status)}</span>`,
             o.created_at.replace("T", " "),
             o.delivered_by_name || "—",
             o.status === "pending" ? `<button data-mark-progress="${o.id}">Start</button>` : "",
@@ -1593,7 +1587,7 @@ async function renderDriverDispatchView() {
           o.cornice_model,
           o.quantity,
           o.delivery_location,
-          `<span style="color:${o.status === 'delivered' ? '#5a5' : o.status === 'pending' ? '#e55' : '#da5'}">${escapeHtml(o.status)}</span>`,
+            `<span class="tag ${o.status === 'delivered' ? 'tag-ok' : o.status === 'pending' ? 'tag-err' : 'tag-warn'}">${escapeHtml(o.status)}</span>`,
           o.created_at.replace("T", " "),
           `<button data-deliver-order="${o.id}">Mark Delivered</button>`,
         ],
@@ -1685,12 +1679,12 @@ async function renderStaffPayroll() {
       <div class="metric-row">
         <div class="metric"><span>Week</span><strong>${escapeHtml(payroll.week_start)}</strong></div>
         <div class="metric"><span>Hours</span><strong>${payroll.total_hours.toFixed(1)}h</strong></div>
-        <div class="metric"><span>Status</span><strong style="color:${payroll.status === 'final' ? '#5a5' : payroll.status === 'unresolved' ? '#e55' : '#da5'}">${escapeHtml(payroll.status)}</strong></div>
+        <div class="metric"><span>Status</span><strong class="${payroll.status === 'final' ? 'metric-ok' : payroll.status === 'unresolved' ? 'metric-err' : 'metric-warn'}">${escapeHtml(payroll.status)}</strong></div>
       </div>
     `;
 
     body += `<h3>Pay Breakdown</h3>`;
-    body += `<table class="table"><tbody>`;
+    body += `<div class="table-wrap"><table class="table"><tbody>`;
     body += `<tr><td>Base Pay</td><td><strong>$${payroll.base_pay.toFixed(2)}</strong></td></tr>`;
     body += `<tr><td>Known Units</td><td>${payroll.total_units_known.toFixed(1)}</td></tr>`;
     body += `<tr><td>Unit Threshold</td><td>${payroll.unit_threshold.toFixed(0)} <small>(${escapeHtml(payroll.threshold_note)})</small></td></tr>`;
@@ -1700,7 +1694,7 @@ async function renderStaffPayroll() {
     if (payroll.gross_pay !== null && payroll.gross_pay !== undefined) {
       body += `<tr style="font-size:1.2em"><td><strong>Gross Pay</strong></td><td><strong>$${payroll.gross_pay.toFixed(2)}</strong></td></tr>`;
     }
-    body += `</tbody></table>`;
+    body += `</tbody></table></div>`;
 
     if (payroll.unknown_rate_details.length > 0) {
       body += `<div class="message" style="margin-top:1em">Unknown-rate cornices pending admin resolution:</div>`;

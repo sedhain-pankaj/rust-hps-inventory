@@ -1,4 +1,5 @@
 import { escapeHtml, invoke, setBusy } from "./api.js";
+import { icon } from "./icons.js";
 
 const modalRoot = document.getElementById("modal-root");
 
@@ -49,14 +50,16 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
         <section class="modal" role="dialog" aria-modal="true">
           <header>
             <h2>${escapeHtml(title)}</h2>
-            <button class="icon ghost" data-close title="Close">X</button>
+            <button class="icon ghost" data-close title="Close">${icon("x")}</button>
           </header>
           <div class="body">
             <div class="message">${escapeHtml(employeeLabel)}</div>
             <div id="auth-fp-icon" class="auth-fp-icon scanning">
-              <img src="./assets/noun-fingerprint-1377758.svg" alt="Fingerprint" width="80" height="80" />
+              <span class="ring"></span>
+              <span class="ring r2"></span>
+              <img src="./assets/noun-fingerprint-1377758.svg" alt="Fingerprint" width="72" height="72" />
             </div>
-            <div id="auth-fp-status" class="message" style="margin-top:0.5em;font-size:0.9em;text-align:center;">Scanning…</div>
+            <div id="auth-fp-status" class="scan-status info">Scanning…</div>
             <label id="auth-password-label" style="display:none">
               Password
               <input data-password type="password" autocomplete="current-password" placeholder="Enter password…" />
@@ -83,8 +86,8 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
       passwordVisible = true;
       passwordLabel.style.display = "";
       passwordButton.style.display = "";
+      fpStatus.className = "scan-status err";
       fpStatus.textContent = "5/5 tries failed — try again, or use password below.";
-      fpStatus.style.color = "#c55";
       passwordInput.focus();
     };
 
@@ -99,9 +102,8 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
       fpIcon.classList.add("scanning");
       message.textContent = "";
       message.classList.remove("error");
+      fpStatus.className = "scan-status info";
       fpStatus.textContent = "Starting scan…";
-      fpStatus.style.color = "#2c3e50";
-      fpStatus.style.background = "#eaf7ff";
       try {
         const start = await invoke("start_fingerprint_auth", { requireAdmin });
         let nextIndex = 0;
@@ -124,14 +126,12 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
               if (raw.startsWith("ATTEMPT|")) {
                 const parts = raw.split("|");
                 scanAttempts = parseInt(parts[1]) || scanAttempts;
+                fpStatus.className = "scan-status info";
                 fpStatus.textContent = `Scan attempt ${scanAttempts}/${parts[2]}: waiting for finger…`;
-                fpStatus.style.background = "#eaf7ff";
-                fpStatus.style.color = "#2c3e50";
               } else if (raw.startsWith("RETRY|")) {
                 lastRetryReason = raw.split("|").slice(1).join("|");
+                fpStatus.className = "scan-status warn";
                 fpStatus.textContent = `⚠ Attempt ${scanAttempts}: ${mapRetryReason(lastRetryReason)}`;
-                fpStatus.style.background = "#fff3e6";
-                fpStatus.style.color = "#c0571a";
               } else if (raw.startsWith("ERROR|")) {
                 const err = raw.split("|").slice(1).join("|");
                 console.log("[auth] helper error:", err);
@@ -141,9 +141,8 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
 
           if (status.state === "done") {
             if (employee && status.employee.id !== employee.id) {
+              fpStatus.className = "scan-status err";
               fpStatus.textContent = `Wrong fingerprint — this session is for ${employee.name}`;
-              fpStatus.style.background = "#f8d7da";
-              fpStatus.style.color = "#842029";
               scanning = false;
               setTimeout(() => doFingerprintScan(), 1500);
               return;
@@ -172,9 +171,8 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
           showPasswordFallback();
           fpStatus.textContent = `${fpFailures}/5 tries failed: ${displayReason}`;
         } else {
+          fpStatus.className = "scan-status err";
           fpStatus.textContent = `${fpFailures}/5 tries failed: ${displayReason}`;
-          fpStatus.style.background = "#fff3e6";
-          fpStatus.style.color = "#c55";
         }
         scanning = false;
         setTimeout(() => doFingerprintScan(), 800);
@@ -188,9 +186,8 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
           showPasswordFallback();
           fpStatus.textContent = `${fpFailures}/5 tries failed: ${reason}`;
         } else {
+          fpStatus.className = "scan-status err";
           fpStatus.textContent = `${fpFailures}/5 tries failed: ${reason}`;
-          fpStatus.style.background = "#fff3e6";
-          fpStatus.style.color = "#c55";
         }
         scanning = false;
         setTimeout(() => doFingerprintScan(), 800);
@@ -246,7 +243,7 @@ export function chooseClockAction(employee) {
         <section class="modal" role="dialog" aria-modal="true">
           <header>
             <h2>${escapeHtml(employee.name)}</h2>
-            <button class="icon ghost" data-close title="Close">X</button>
+            <button class="icon ghost" data-close title="Close">${icon("x")}</button>
           </header>
           <div class="body">
             <div class="message">${escapeHtml(employee.id)}</div>
