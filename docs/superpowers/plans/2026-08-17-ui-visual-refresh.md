@@ -618,6 +618,8 @@ label {
 
 .side-nav button {
   position: relative;
+  display: flex;
+  align-items: center;
   justify-content: start;
   gap: 12px;
   min-height: 58px;
@@ -717,7 +719,7 @@ label {
 .table-wrap {
   border: 1px solid var(--line);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: clip;
   background: var(--bg-1);
 }
 
@@ -1513,7 +1515,7 @@ function topbar(title, subtitle) {
       </div>
       <div class="status-pill" data-status-pill title="${escapeHtml(state.status?.database_path || "")}">
         ${icon("clock", 16)}
-        <span>Session<span data-session-remaining></span></span>
+        <span>Session <span data-session-remaining></span></span>
       </div>
     </header>
   `;
