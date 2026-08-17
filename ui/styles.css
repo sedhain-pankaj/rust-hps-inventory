@@ -497,6 +497,8 @@ label {
 }
 
 .side-nav button {
+  display: flex;
+  align-items: center;
   position: relative;
   justify-content: start;
   gap: 12px;
@@ -597,7 +599,7 @@ label {
 .table-wrap {
   border: 1px solid var(--line);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: clip;
   background: var(--bg-1);
 }
 

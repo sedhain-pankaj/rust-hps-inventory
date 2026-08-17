@@ -1786,7 +1786,7 @@ function topbar(title, subtitle) {
       </div>
       <div class="status-pill" data-status-pill title="${escapeHtml(state.status?.database_path || "")}">
         ${icon("clock", 16)}
-        <span>Session<span data-session-remaining></span></span>
+        <span>Session <span data-session-remaining></span></span>
       </div>
     </header>
   `;
