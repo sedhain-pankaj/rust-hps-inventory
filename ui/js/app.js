@@ -6,7 +6,7 @@ import {
   todayIso,
   weekStartIso,
 } from "./api.js";
-import { chooseClockAction, requestAuth } from "./auth.js";
+import { confirmModal, requestAuth } from "./auth.js";
 import { icon } from "./icons.js";
 import { createTableStore, mountInlineTable } from "./table.js";
 
@@ -18,6 +18,7 @@ const state = {
   staff: [],
   admin: null,
   currentStaff: null,
+  sessionSource: null,
   adminView: "alerts",
   adminDbTable: "employees",
   selectedDbRow: null,
@@ -259,6 +260,7 @@ async function renderStaffPicker() {
       try {
         const response = await requestAuth({ title: "Staff", requireAdmin: false, employee });
         state.currentStaff = response.employee;
+        state.sessionSource = response.source;
         startSession(response.employee, "staff");
         state.staffView = "clock";
         renderStaffDashboard();
@@ -1414,12 +1416,16 @@ async function renderStaffPanel() {
 }
 
 async function renderStaffClock(message = "") {
-  const events = await invoke("list_clock_events", { date: todayIso() });
+  const [events, status] = await Promise.all([
+    invoke("list_clock_events", { date: todayIso() }),
+    invoke("get_clock_status", { employeeId: state.currentStaff.id }),
+  ]);
+  const nextAction = status.today_state === "in" ? "clock_out" : "clock_in";
   setPanel(
     "Clock",
-    `<button class="primary" data-clock>Clock In / Out</button>`,
+    `<button class="primary" data-clock>${nextAction === "clock_in" ? "Clock In" : "Clock Out"}</button>`,
     `
-      <div class="message">${escapeHtml(message)}</div>
+      ${message ? `<div class="message">${escapeHtml(message)}</div>` : ""}
       ${table(
         ["Time", "Employee", "Action", "Note"],
         events
@@ -1439,22 +1445,27 @@ async function renderStaffClock(message = "") {
   app.querySelector("[data-clock]").addEventListener("click", async (event) => {
     setBusy(event.currentTarget);
     try {
-      const auth = await requestAuth({
-        title: "Clock",
-        employee: state.currentStaff,
-        requireAdmin: false,
+      const warning =
+        nextAction === "clock_in" && status.missed_yesterday_clock_out
+          ? "You didn't clock out yesterday."
+          : null;
+      await confirmModal({
+        title: nextAction === "clock_in" ? "Clock in now?" : "Clock out now?",
+        confirmLabel: nextAction === "clock_in" ? "Clock In" : "Clock Out",
+        warning,
       });
-      const action = await chooseClockAction(auth.employee);
       const result = await invoke("record_clock_event", {
         request: {
-          employee_id: auth.employee.id,
-          action,
-          source: auth.source,
+          employee_id: state.currentStaff.id,
+          action: nextAction,
+          source: state.sessionSource || "password",
         },
       });
       renderStaffClock(`${formatAction(result.action)} recorded at ${result.timestamp.slice(11)}`);
     } catch (error) {
-      renderStaffClock(String(error.message || error));
+      if (String(error.message || error) !== "Cancelled.") {
+        renderStaffClock(String(error.message || error));
+      }
     } finally {
       setBusy(event.currentTarget, false);
     }

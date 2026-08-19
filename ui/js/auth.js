@@ -236,36 +236,41 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
   });
 }
 
-export function chooseClockAction(employee) {
+export function confirmModal({
+  title,
+  body = "",
+  warning = null,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+}) {
   return new Promise((resolve, reject) => {
     modalRoot.innerHTML = `
       <div class="modal-backdrop">
         <section class="modal" role="dialog" aria-modal="true">
           <header>
-            <h2>${escapeHtml(employee.name)}</h2>
+            <h2>${escapeHtml(title)}</h2>
             <button class="icon ghost" data-close title="Close">${icon("x")}</button>
           </header>
           <div class="body">
-            <div class="message">${escapeHtml(employee.id)}</div>
+            ${body ? `<p>${body}</p>` : ""}
+            ${warning ? `<div class="scan-status warn">${escapeHtml(warning)}</div>` : ""}
           </div>
           <footer>
-            <button class="warning" data-action="clock_out">Clock out</button>
-            <button class="primary" data-action="clock_in">Clock in</button>
+            <button class="ghost" data-cancel>${escapeHtml(cancelLabel)}</button>
+            <button class="primary" data-confirm>${escapeHtml(confirmLabel)}</button>
           </footer>
         </section>
       </div>
     `;
-
-    modalRoot.querySelector("[data-close]").addEventListener("click", () => {
+    const cancel = () => {
       closeModal();
-      reject(new Error("Clock action cancelled."));
-    });
-    modalRoot.querySelectorAll("[data-action]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const action = button.dataset.action;
-        closeModal();
-        resolve(action);
-      });
+      reject(new Error("Cancelled."));
+    };
+    modalRoot.querySelector("[data-close]").addEventListener("click", cancel);
+    modalRoot.querySelector("[data-cancel]").addEventListener("click", cancel);
+    modalRoot.querySelector("[data-confirm]").addEventListener("click", () => {
+      closeModal();
+      resolve(true);
     });
   });
 }
