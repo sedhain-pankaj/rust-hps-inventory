@@ -1444,106 +1444,206 @@ async function renderStaffClock(message = "") {
   });
 }
 
+let staffLogStore = null;
+let corniceModelSearchTimer = null;
+
+function bindCorniceModelSearch() {
+  const panelBody = app.querySelector("[data-panel-body]");
+  if (!panelBody || panelBody.dataset.corniceSearchBound) return;
+  panelBody.dataset.corniceSearchBound = "1";
+  panelBody.addEventListener("input", (event) => {
+    const input = event.target;
+    if (!input.matches('input[data-key="model"]') || state.staffView !== "cornice") return;
+    const query = input.value.trim();
+    clearTimeout(corniceModelSearchTimer);
+    if (query.length < 2) {
+      app.querySelector("#cornice-search-results")?.style.setProperty("display", "none");
+      return;
+    }
+    corniceModelSearchTimer = setTimeout(async () => {
+      try {
+        const resp = await invoke("search_cornice_rates", { request: { query } });
+        state.corniceRateMatches = resp.matches || [];
+        const box = app.querySelector("#cornice-search-results");
+        if (!box) return;
+        box.textContent = (resp.matches || []).length
+          ? `${resp.matches.length} match(es) — pick from the dropdown or keep typing.`
+          : "No match found — will be logged as unknown/custom.";
+        box.style.display = "block";
+      } catch {
+        /* ignore */
+      }
+    }, 200);
+  });
+}
+
 async function renderStaffCornice() {
   const logs = await invoke("list_cornice_logs", {
     employeeId: state.currentStaff.id,
     date: null,
-    weekStart: weekStartIso(),
+    weekStart: null,
   });
+  const today = todayIso();
+  const currentWeek = weekStartIso();
+
+  const weeks = new Map();
+  for (const log of logs) {
+    if (!weeks.has(log.week_start)) weeks.set(log.week_start, new Map());
+    const days = weeks.get(log.week_start);
+    if (!days.has(log.log_date)) days.set(log.log_date, []);
+    days.get(log.log_date).push(log);
+  }
+  if (!weeks.has(currentWeek)) weeks.set(currentWeek, new Map());
+  const currentDays = weeks.get(currentWeek);
+  if (!currentDays.has(today)) currentDays.set(today, []);
+
+  const weekNames = [...weeks.keys()].sort().reverse();
+  const body = weekNames
+    .map((weekStart) => {
+      const days = weeks.get(weekStart);
+      const dayNames = [...days.keys()].sort().reverse();
+      const weekTotal = [...days.values()].flat().reduce((sum, log) => sum + log.total_units, 0);
+      const dayBoxes = dayNames
+        .map((date) => {
+          const dayLogs = days.get(date);
+          const dayTotal = dayLogs.reduce((sum, log) => sum + log.total_units, 0);
+          return `
+            <div class="day-box">
+              <h3><span>${escapeHtml(date)}</span><small>${dayTotal.toFixed(2)} units</small></h3>
+              <div data-day-table="${escapeHtml(date)}"></div>
+            </div>`;
+        })
+        .join("");
+      return `
+        <div class="week-box">
+          <h3><span>${escapeHtml(weekStart)} – ${escapeHtml(shiftIso(weekStart, 6))}</span><small>${weekTotal.toFixed(2)} units</small></h3>
+          ${dayBoxes}
+        </div>`;
+    })
+    .join("");
   setPanel(
     "Cornice Log",
     "",
     `
-      <form class="form-grid" data-cornice-form>
-        <label>Series<input name="series" placeholder="Auto-filled on match" /></label>
-        <label>Model
-          <input name="model" id="cornice-model-input" required list="cornice-models-datalist" placeholder="Start typing cornice model…" autocomplete="off" />
-          <datalist id="cornice-models-datalist"></datalist>
-          <div id="cornice-search-results" class="message" style="display:none;margin-top:0.5em;font-size:0.9em;"></div>
-        </label>
-        <label>Lengths<input name="lengths" type="number" min="1" required /></label>
-        <div class="panel-actions"><button class="primary" type="submit">Add Log</button></div>
-      </form>
-      ${table(
-        ["Date", "Model", "Lengths", "Unit", "Units", "Week Units"],
-        logs.map((log) => ({
-          review: log.needs_admin_review,
-          cells: [
-            log.log_date,
-            log.model,
-            log.lengths,
-            log.unit_text || "Custom",
-            log.total_units.toFixed(2),
-            log.weekly_units.toFixed(2),
-          ],
-        })),
-      )}
+      <datalist id="staff-cornice-models"></datalist>
+      <div id="cornice-search-results" class="message" style="display:none;margin-bottom:12px;font-size:0.9em;"></div>
+      ${body || `<div class="empty">No log entries yet.</div>`}
     `,
   );
 
-  // Fuzzy search autocomplete for cornice model
-  const modelInput = app.querySelector("#cornice-model-input");
-  const datalist = app.querySelector("#cornice-models-datalist");
-  const resultsBox = app.querySelector("#cornice-search-results");
-  let searchTimeout = null;
+  try {
+    const resp = await invoke("search_cornice_rates", { request: { query: "" } });
+    app.querySelector("#staff-cornice-models").innerHTML = (resp.matches || [])
+      .map(
+        (match) =>
+          `<option value="${escapeHtml(match.model)}">${escapeHtml(match.series ? `${match.series} ` : "")}${escapeHtml(match.model)} (${match.unit_text})</option>`,
+      )
+      .join("");
+  } catch {
+    /* ignore */
+  }
+  bindCorniceModelSearch();
 
-  modelInput.addEventListener("input", async () => {
-    const query = modelInput.value.trim();
-    clearTimeout(searchTimeout);
-    if (query.length < 2) {
-      datalist.innerHTML = "";
-      resultsBox.style.display = "none";
-      return;
-    }
-    searchTimeout = setTimeout(async () => {
-      try {
-        const resp = await invoke("search_cornice_rates", { request: { query } });
-        const matches = resp.matches || [];
-        state.corniceRateMatches = matches;
-        datalist.innerHTML = matches.slice(0, 15).map(m =>
-          `<option value="${escapeHtml(m.model)}">${escapeHtml(m.series ? m.series + ' ' : '')}${escapeHtml(m.model)} (${m.unit_text})</option>`
-        ).join("");
-        if (matches.length > 0) {
-          resultsBox.textContent = `${matches.length} match(es). Select or keep typing.`;
-          resultsBox.style.display = "block";
-        } else {
-          resultsBox.textContent = `No match found — will be logged as unknown/custom.`;
-          resultsBox.style.display = "block";
-        }
-      } catch { /* ignore */ }
-    }, 200);
-  });
-
-  modelInput.addEventListener("focus", async () => {
-    const query = modelInput.value.trim();
-    if (query.length >= 2) return;
-    // Show all rates on focus if no input
-    try {
-      const resp = await invoke("search_cornice_rates", { request: { query: "" } });
-      datalist.innerHTML = "";
-    } catch { /* ignore */ }
-  });
-
-  app.querySelector("[data-cornice-form]").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const modelVal = form.get("model");
-    // Auto-fill series from match
-    let series = form.get("series");
-    if (!series) {
-      const match = state.corniceRateMatches.find(m => m.model.toLowerCase() === modelVal.toLowerCase());
-      if (match) series = match.series;
-    }
-    await invoke("add_cornice_log", {
-      input: {
-        employee_id: state.currentStaff.id,
-        log_date: todayIso(),
-        series: series || "",
-        model: modelVal,
-        lengths: Number(form.get("lengths")),
+  if (!staffLogStore) {
+    staffLogStore = createTableStore({
+      commit: {
+        add: (values) => {
+          const match = state.corniceRateMatches.find(
+            (item) => item.model.toLowerCase() === String(values.model).trim().toLowerCase(),
+          );
+          return invoke("add_cornice_log", {
+            input: {
+              employee_id: state.currentStaff.id,
+              log_date: todayIso(),
+              series: match?.series || "",
+              model: values.model,
+              lengths: values.lengths,
+            },
+          });
+        },
+        save: (values) =>
+          invoke("update_cornice_log", {
+            input: {
+              id: values.id,
+              actor_id: state.currentStaff.id,
+              series: values.series,
+              model: values.model,
+              lengths: values.lengths,
+            },
+          }),
+        remove: (id) => invoke("delete_cornice_log", { id, actorId: state.currentStaff.id }),
+      },
+      onDone: () => {
+        staffLogStore = null;
+        renderStaffCornice();
       },
     });
-    renderStaffCornice();
+  }
+  const store = staffLogStore;
+  const mountedDays = {};
+  weekNames.forEach((weekStart) => {
+    const days = weeks.get(weekStart);
+    [...days.keys()].sort().reverse().forEach((date) => {
+      mountedDays[date] = mountInlineTable(
+        app.querySelector(`[data-day-table="${CSS.escape(date)}"]`),
+        store,
+        {
+          columns: [
+            {
+              key: "model",
+              label: "Model",
+              type: "text",
+              editable: true,
+              list: "staff-cornice-models",
+              cellHtml: (log, col) => corniceLogCellHtml(log, col.key),
+            },
+            {
+              key: "lengths",
+              label: "Lengths",
+              type: "number",
+              editable: true,
+              align: "right",
+              cellHtml: (log, col) => corniceLogCellHtml(log, col.key),
+            },
+            {
+              key: "unit_text",
+              label: "Unit",
+              type: "text",
+              editable: false,
+              cellHtml: (log) => escapeHtml(log.unit_text || "Custom"),
+            },
+            {
+              key: "total_units",
+              label: "Units",
+              type: "number",
+              editable: false,
+              align: "right",
+              cellHtml: (log) => log.total_units.toFixed(2),
+            },
+          ],
+          rows: days.get(date),
+          tableId: `day-${CSS.escape(date)}`,
+          emptyText: "No entries",
+          rowClass: (log) => (parsePrevValues(log)?.deleted ? "staged-delete" : ""),
+          actionsEl: app.querySelector("[data-panel-actions]"),
+          refreshFn: renderStaffCornice,
+          extraActions: `<button class="ghost" data-add-log>${icon("plus", 18)} Add</button>`,
+          onActionsRendered: (el) => {
+            el.querySelector("[data-add-log]")?.addEventListener("click", () => {
+              store.addNew(`day-${CSS.escape(today)}`, {
+                id: null,
+                series: "",
+                model: "",
+                lengths: 0,
+                unit_text: "",
+                total_units: 0,
+              });
+              mountedDays[today]?.render();
+            });
+          },
+        },
+      );
+    });
   });
 }
 
@@ -1945,6 +2045,42 @@ function fmtBytes(bytes) {
     index += 1;
   }
   return `${value >= 100 || index === 0 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
+}
+
+function shiftIso(iso, days) {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(year, month - 1, day + days);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function parsePrevValues(log) {
+  if (!log.prev_values) return null;
+  try {
+    const parsed = JSON.parse(log.prev_values);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Raw-HTML cell for cornice log Model/Lengths cells (pending old→new, ✎ cue, staged delete).
+// Returns null → caller falls back to the plain escaped value.
+function corniceLogCellHtml(log, key) {
+  const prev = parsePrevValues(log);
+  if (prev && prev.deleted) {
+    return `<span class="old-new"><s>${escapeHtml(log.model)}</s> <span class="tag warn">pending deletion</span></span>`;
+  }
+  let cell;
+  if (prev && prev[key] !== undefined && String(prev[key]) !== String(log[key])) {
+    cell = `<span class="old-new"><s>${escapeHtml(prev[key])}</s> → ${escapeHtml(log[key])}</span>`;
+  } else {
+    cell = escapeHtml(log[key]);
+  }
+  if (log.amended_at) {
+    return `<span class="amended-model">${cell}<span class="amended" title="Amended ${escapeHtml(log.amended_at)} by ${escapeHtml(log.amended_by || "")}">✎</span></span>`;
+  }
+  return key === "model" ? null : cell;
 }
 
 function fingerOptions(selected = "right-index") {
