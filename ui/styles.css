@@ -247,7 +247,7 @@ label {
 }
 
 .clock-logo {
-  width: 64px;
+  width: 100px;
   height: auto;
   margin: 0 auto 24px;
   opacity: 0.9;
@@ -263,13 +263,9 @@ label {
   text-shadow: 0 0 80px rgba(242, 234, 217, 0.15);
 }
 
-.clock-time .secs {
-  color: var(--brass);
-}
-
 .clock-date {
   margin-top: 28px;
-  font-size: clamp(1.4rem, 3vw, 2.6rem);
+  font-size: clamp(1.7rem, 3.5vw, 3.2rem);
   font-weight: 600;
   color: var(--text-2);
   text-transform: uppercase;
@@ -885,31 +881,26 @@ label {
   background: var(--bg-2);
   color: var(--text-1);
   transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}ackground: var(--bg-2);
+  color: var(--text-1);
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 .scan-status.info {
-  border-left-color: var(--brass);
   background: var(--brass-tint);
 }
 
 .scan-status.warn {
-  border-left-color: var(--warn);
   background: var(--warn-tint);
   color: var(--warn);
 }
 
 .scan-status.ok {
-  border-left-color: var(--ok);
   background: var(--ok-tint);
   color: var(--ok);
 }
 
 .scan-status.err {
-  border-left-color: var(--err);
-  background: var(--err-tint);
-  color: var(--err);
-}
-
 .cancel-text {
   color: var(--err);
   font-weight: 600;
