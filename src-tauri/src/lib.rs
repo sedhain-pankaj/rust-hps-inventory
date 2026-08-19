@@ -25,6 +25,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_status,
+            storage_status,
             get_asset_data_url,
             list_staff,
             save_employee,

@@ -3209,3 +3209,100 @@ fn parse_timestamp(value: &str) -> Option<NaiveDateTime> {
 fn to_string(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
+
+fn disk_usage(path: &std::path::Path) -> Option<(u64, u64, f64)> {
+    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
+    let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c_path.as_ptr(), &mut stats) } != 0 {
+        return None;
+    }
+    let frsize = stats.f_frsize as u64;
+    let total = stats.f_blocks as u64 * frsize;
+    let free = stats.f_bavail as u64 * frsize;
+    let pct = if stats.f_blocks > 0 {
+        100.0 * (1.0 - stats.f_bavail as f64 / stats.f_blocks as f64)
+    } else {
+        0.0
+    };
+    Some((total, free, pct))
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut index = 0;
+    while value >= 1024.0 && index < UNITS.len() - 1 {
+        value /= 1024.0;
+        index += 1;
+    }
+    format!(
+        "{} {}",
+        if value >= 100.0 || index == 0 {
+            value as u64
+        } else {
+            (value * 10.0) as u64 / 10
+        },
+        UNITS[index]
+    )
+}
+
+#[tauri::command]
+pub async fn storage_status(state: State<'_, AppState>) -> CommandResult<StorageStatus> {
+    let db_path = state.paths.db_path.clone();
+    let db_size_bytes = std::fs::metadata(&db_path).map(|meta| meta.len()).unwrap_or(0);
+    let dir = db_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    match disk_usage(dir) {
+        Some((total, free, pct)) => {
+            if pct > 90.0 {
+                let existing: Option<i64> = sqlx::query_scalar(
+                    "SELECT 1 FROM admin_notifications WHERE kind = 'disk_space' AND resolved = 0 LIMIT 1",
+                )
+                .fetch_optional(&state.db)
+                .await
+                .map_err(to_string)?;
+                if existing.is_none() {
+                    notification(
+                        &state.db,
+                        "red",
+                        "disk_space",
+                        &format!(
+                            "Disk is {pct:.0}% full — only {} free. Free up space.",
+                            human_bytes(free)
+                        ),
+                        "app_meta",
+                        None,
+                    )
+                    .await
+                    .map_err(to_string)?;
+                }
+            }
+            Ok(StorageStatus {
+                db_path: db_path.to_string_lossy().to_string(),
+                db_size_bytes,
+                disk_total_bytes: total,
+                disk_free_bytes: free,
+                disk_used_pct: pct,
+            })
+        }
+        None => Ok(StorageStatus {
+            db_path: db_path.to_string_lossy().to_string(),
+            db_size_bytes,
+            disk_total_bytes: 0,
+            disk_free_bytes: 0,
+            disk_used_pct: 0.0,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn disk_usage_returns_sane_values() {
+        let (total, free, pct) = disk_usage(std::path::Path::new("/")).expect("statvfs failed");
+        assert!(total > 0);
+        assert!(free <= total);
+        assert!((0.0..=100.0).contains(&pct));
+    }
+}

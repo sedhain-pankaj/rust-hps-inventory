@@ -449,3 +449,13 @@ pub struct OverridePayrollProrationInput {
     /// true = accept prorated threshold, false = use standard 180-unit threshold
     pub accept_prorated: bool,
 }
+
+// Storage / disk status
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageStatus {
+    pub db_path: String,
+    pub db_size_bytes: u64,
+    pub disk_total_bytes: u64,
+    pub disk_free_bytes: u64,
+    pub disk_used_pct: f64,
+}
