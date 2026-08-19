@@ -107,6 +107,9 @@ const CORNICE_LOG_COLUMNS: &[AdminColumn] = &[
     col("total_units", "Total Units", AdminColumnKind::Real),
     col("is_custom", "Custom", AdminColumnKind::Bool),
     col("needs_admin_review", "Review", AdminColumnKind::Bool),
+    readonly_col("prev_values", "Previous Values", AdminColumnKind::Text),
+    readonly_col("amended_at", "Amended At", AdminColumnKind::Text),
+    readonly_col("amended_by", "Amended By", AdminColumnKind::Text),
     col("created_at", "Created", AdminColumnKind::Text),
 ];
 const PRODUCTION_LOG_COLUMNS: &[AdminColumn] = &[
@@ -1490,6 +1493,190 @@ pub async fn list_cornice_logs(
         logs.push(cornice_log_from_row(&state.db, row).await?);
     }
     Ok(logs)
+}
+
+#[tauri::command]
+pub async fn update_cornice_log(
+    state: State<'_, AppState>,
+    input: CorniceLogUpdateInput,
+) -> CommandResult<CorniceLog> {
+    let existing = cornice_log_by_id(&state.db, input.id).await?;
+    if existing.employee_id != input.actor_id.trim() {
+        return Err("You can only edit your own log entries.".to_string());
+    }
+    if input.model.trim().is_empty() {
+        return Err("Model is required.".to_string());
+    }
+    if input.lengths <= 0 {
+        return Err("Lengths must be greater than zero.".to_string());
+    }
+
+    let rate = find_rate_for_model(&state.db, input.model.trim())
+        .await
+        .map_err(to_string)?;
+    let (series, unit_text, unit_value, is_custom) = match rate {
+        Some(rate) => (rate.series, rate.unit_text, rate.unit_value, false),
+        None => (input.series.trim().to_string(), String::new(), None, true),
+    };
+    let total_units = unit_value.unwrap_or(0.0) * input.lengths as f64;
+    let now = crate::db::now_string();
+
+    let mut prev = serde_json::Map::new();
+    if existing.model != input.model.trim() {
+        prev.insert("model".to_string(), serde_json::Value::String(existing.model.clone()));
+    }
+    if existing.lengths != input.lengths {
+        prev.insert("lengths".to_string(), serde_json::Value::from(existing.lengths));
+    }
+    let changed = !prev.is_empty();
+    let same_day = existing.log_date == today_string();
+    let needs_review = if same_day {
+        is_custom || unit_value.is_none()
+    } else {
+        changed || is_custom || unit_value.is_none()
+    };
+    let prev_values = if !same_day && changed {
+        Some(serde_json::Value::Object(prev).to_string())
+    } else {
+        None
+    };
+
+    sqlx::query(
+        r#"
+        UPDATE cornice_logs
+        SET series = ?, model = ?, lengths = ?, unit_text = ?, unit_value = ?, total_units = ?,
+            is_custom = ?, needs_admin_review = ?, prev_values = ?, amended_at = ?, amended_by = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(series)
+    .bind(input.model.trim())
+    .bind(input.lengths)
+    .bind(unit_text)
+    .bind(unit_value)
+    .bind(total_units)
+    .bind(is_custom as i64)
+    .bind(needs_review as i64)
+    .bind(&prev_values)
+    .bind(&now)
+    .bind(input.actor_id.trim())
+    .bind(input.id)
+    .execute(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    if !same_day && needs_review {
+        notification(
+            &state.db,
+            "yellow",
+            "cornice_log_edit",
+            &format!(
+                "{} edited a past entry ({} {}). Pending approval.",
+                existing.employee_name, existing.log_date, existing.model
+            ),
+            "cornice_logs",
+            Some(input.id),
+        )
+        .await
+        .map_err(to_string)?;
+    }
+
+    cornice_log_by_id(&state.db, input.id).await
+}
+
+#[tauri::command]
+pub async fn delete_cornice_log(
+    state: State<'_, AppState>,
+    id: i64,
+    actor_id: String,
+) -> CommandResult<()> {
+    let existing = cornice_log_by_id(&state.db, id).await?;
+    if existing.employee_id != actor_id.trim() {
+        return Err("You can only delete your own log entries.".to_string());
+    }
+    let now = crate::db::now_string();
+    if existing.log_date == today_string() {
+        sqlx::query("DELETE FROM cornice_logs WHERE id = ?")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(to_string)?;
+        return Ok(());
+    }
+    let prev = serde_json::json!({
+        "deleted": true,
+        "model": existing.model,
+        "lengths": existing.lengths,
+        "total_units": existing.total_units,
+    });
+    sqlx::query(
+        r#"
+        UPDATE cornice_logs
+        SET needs_admin_review = 1, prev_values = ?, amended_at = ?, amended_by = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(prev.to_string())
+    .bind(&now)
+    .bind(actor_id.trim())
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(to_string)?;
+    notification(
+        &state.db,
+        "yellow",
+        "cornice_log_edit",
+        &format!(
+            "{} deleted a past entry ({} {}). Pending approval.",
+            existing.employee_name, existing.log_date, existing.model
+        ),
+        "cornice_logs",
+        Some(id),
+    )
+    .await
+    .map_err(to_string)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn approve_cornice_log(state: State<'_, AppState>, id: i64) -> CommandResult<()> {
+    let prev: Option<String> = sqlx::query_scalar("SELECT prev_values FROM cornice_logs WHERE id = ?")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(to_string)?;
+    let staged_delete = prev
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value.get("deleted").and_then(|flag| flag.as_bool()))
+        .unwrap_or(false);
+
+    if staged_delete {
+        sqlx::query("DELETE FROM cornice_logs WHERE id = ?")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(to_string)?;
+    } else {
+        sqlx::query("UPDATE cornice_logs SET prev_values = NULL, needs_admin_review = 0 WHERE id = ?")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(to_string)?;
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE admin_notifications SET resolved = 1
+        WHERE kind = 'cornice_log_edit' AND entity_table = 'cornice_logs' AND entity_id = ? AND resolved = 0
+        "#,
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(to_string)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -3225,6 +3412,9 @@ async fn cornice_log_from_row(
         weekly_units,
         is_custom: row.get::<i64, _>("is_custom") != 0,
         needs_admin_review: row.get::<i64, _>("needs_admin_review") != 0,
+        prev_values: row.try_get::<Option<String>, _>("prev_values").unwrap_or(None),
+        amended_at: row.try_get::<Option<String>, _>("amended_at").unwrap_or(None),
+        amended_by: row.try_get::<Option<String>, _>("amended_by").unwrap_or(None),
     })
 }
 

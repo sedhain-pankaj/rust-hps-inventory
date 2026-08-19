@@ -190,6 +190,18 @@ pub struct CorniceLog {
     pub weekly_units: f64,
     pub is_custom: bool,
     pub needs_admin_review: bool,
+    pub prev_values: Option<String>,
+    pub amended_at: Option<String>,
+    pub amended_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CorniceLogUpdateInput {
+    pub id: i64,
+    pub actor_id: String,
+    pub series: String,
+    pub model: String,
+    pub lengths: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
