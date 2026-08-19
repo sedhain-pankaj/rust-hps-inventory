@@ -26,7 +26,6 @@ const state = {
   selectedEmployee: null,
   stockFilter: "all",
   selectedRate: null,
-  selectedMould: null,
   corniceRateMatches: [],
   // Session management
   sessionUser: null,
@@ -314,7 +313,7 @@ async function renderAdminPanel() {
   if (state.adminView === "enroll") return renderEnrollPanel();
   if (state.adminView === "payroll") return renderPayrollPanel();
   if (state.adminView === "dispatch") return renderDispatchOrdersPanel();
-  if (state.adminView === "mould_inventory") return renderMouldInventoryPanel();
+  if (state.adminView === "mould_inventory") return renderMouldLocationsPanel();
   if (state.adminView === "stock") return renderStockPanel();
   if (state.adminView === "rates") return renderRatesPanel();
   if (state.adminView === "time") return renderTimePanel();
@@ -1092,54 +1091,118 @@ async function renderPayrollPanel() {
   }
 }
 
-// ==================== Admin: Mould Inventory Panel ====================
+// ==================== Admin: Mould Locations Panel ====================
 
-async function renderMouldInventoryPanel() {
-  const items = await invoke("list_mould_inventory");
-  const selected = state.selectedMould || { id: null, mould_name: "", storage_location: "", notes: "" };
-  setPanel(
-    "Mould Inventory",
-    `<button class="ghost" data-new-mould>New</button>`,
-    `
-      <form class="form-grid" data-mould-form>
-        <input type="hidden" name="id" value="${selected.id || ''}" />
-        <label>Mould Name<input name="mould_name" value="${escapeHtml(selected.mould_name)}" /></label>
-        <label>Storage Location<input name="storage_location" value="${escapeHtml(selected.storage_location)}" /></label>
-        <label class="wide">Notes<textarea name="notes">${escapeHtml(selected.notes)}</textarea></label>
-        <div class="wide panel-actions"><button class="primary" type="submit">Save Mould</button></div>
-      </form>
-      ${table(
-        ["Mould Name", "Location", "Notes"],
-        items.map(item => ({
-          clickable: true,
-          attrs: `data-mould="${item.id}"`,
-          cells: [item.mould_name, item.storage_location, item.notes],
-        }))
-      )}
-    `
-  );
-  app.querySelector("[data-new-mould]").addEventListener("click", () => {
-    state.selectedMould = null;
-    renderMouldInventoryPanel();
-  });
-  app.querySelectorAll("[data-mould]").forEach(row => {
-    row.addEventListener("click", () => {
-      state.selectedMould = items.find(i => i.id === Number(row.dataset.mould));
-      renderMouldInventoryPanel();
-    });
-  });
-  app.querySelector("[data-mould-form]").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    state.selectedMould = await invoke("save_mould_inventory", {
-      input: {
-        id: form.get("id") ? Number(form.get("id")) : null,
-        mould_name: form.get("mould_name"),
-        storage_location: form.get("storage_location"),
-        notes: form.get("notes"),
+let mouldStore = null;
+
+async function renderMouldLocationsPanel() {
+  const [locations, items] = await Promise.all([
+    invoke("list_mould_locations"),
+    invoke("list_mould_inventory"),
+  ]);
+  const actionsEl = app.querySelector("[data-panel-actions]");
+  const locationColumns = [
+    { key: "mould_name", label: "Mould Name", type: "text", editable: true },
+    {
+      key: "storage_location",
+      label: "Location",
+      type: "select",
+      options: locations.map((loc) => loc.name),
+      editable: true,
+    },
+    { key: "notes", label: "Notes", type: "text", editable: true },
+  ];
+  const boxes = locations
+    .map((loc) => {
+      const locItems = items.filter((item) => item.storage_location === loc.name);
+      return `
+        <div class="day-box">
+          <h3>
+            <span>${escapeHtml(loc.name)} <small>(${locItems.length})</small></span>
+            <span style="display:flex;gap:8px">
+              <button class="ghost" data-add-mould="${escapeHtml(loc.name)}" style="min-height:36px">${icon("plus", 16)} Add</button>
+              <button class="icon ghost" data-del-loc="${loc.id}" title="Delete location (only if empty)">${icon("x", 16)}</button>
+            </span>
+          </h3>
+          <div data-mould-table="${escapeHtml(loc.name)}"></div>
+        </div>`;
+    })
+    .join("");
+  const unmatched = items.filter((item) => !locations.some((loc) => loc.name === item.storage_location));
+  const unassigned = unmatched.length
+    ? `
+      <div class="day-box">
+        <h3><span>Unassigned <small>(legacy locations)</small></span></h3>
+        <div data-mould-table="unassigned"></div>
+      </div>`
+    : "";
+  setPanel("Mould Locations", "", boxes + unassigned || `<div class="empty">No moulds registered.</div>`);
+
+  if (!mouldStore) {
+    mouldStore = createTableStore({
+      commit: {
+        add: (values) => invoke("save_mould_inventory", { input: values }),
+        save: (values) => invoke("save_mould_inventory", { input: values }),
+        remove: (id) => invoke("delete_mould_inventory", { id }),
+      },
+      onDone: () => {
+        mouldStore = null;
+        renderMouldLocationsPanel();
       },
     });
-    renderMouldInventoryPanel();
+  }
+  const store = mouldStore;
+  store.renderActions(actionsEl, {
+    refreshFn: renderMouldLocationsPanel,
+    extraActions: `<button class="ghost" data-add-loc>${icon("plus", 18)} Add Location</button>`,
+    onRendered: (el) => {
+      el.querySelector("[data-add-loc]")?.addEventListener("click", async () => {
+        const name = prompt("New mould location name:");
+        if (!name || !name.trim()) return;
+        try {
+          await invoke("save_mould_location", { input: { id: null, name: name.trim() } });
+          renderMouldLocationsPanel();
+        } catch (error) {
+          alert(String(error.message || error));
+        }
+      });
+    },
+  });
+  const mountFor = (locName, locItems) =>
+    mountInlineTable(app.querySelector(`[data-mould-table="${CSS.escape(locName)}"]`), store, {
+      columns: locationColumns,
+      rows: locItems,
+      tableId: `loc-${CSS.escape(locName)}`,
+      emptyText: "No moulds in this location",
+      actionsEl,
+      refreshFn: renderMouldLocationsPanel,
+    });
+  const mounted = {};
+  locations.forEach((loc) => {
+    mounted[loc.name] = mountFor(loc.name, items.filter((item) => item.storage_location === loc.name));
+  });
+  if (unmatched.length) mounted.unassigned = mountFor("unassigned", unmatched);
+
+  locations.forEach((loc) => {
+    app.querySelector(`[data-add-mould="${CSS.escape(loc.name)}"]`).addEventListener("click", () => {
+      store.addNew(`loc-${CSS.escape(loc.name)}`, {
+        mould_name: "",
+        storage_location: loc.name,
+        notes: "",
+      });
+      mounted[loc.name].render();
+    });
+  });
+  locations.forEach((loc) => {
+    app.querySelector(`[data-del-loc="${loc.id}"]`).addEventListener("click", async () => {
+      if (!confirm(`Delete location "${loc.name}"? Only works when it has no moulds.`)) return;
+      try {
+        await invoke("delete_mould_location", { id: loc.id });
+        renderMouldLocationsPanel();
+      } catch (error) {
+        alert(String(error.message || error));
+      }
+    });
   });
 }
 
@@ -1622,20 +1685,33 @@ async function renderStaffRates() {
 }
 
 async function renderStaffMouldView() {
-  const items = await invoke("list_mould_inventory");
+  const [locations, items] = await Promise.all([
+    invoke("list_mould_locations"),
+    invoke("list_mould_inventory"),
+  ]);
+  const boxes = locations
+    .map((loc) => {
+      const locItems = items.filter((item) => item.storage_location === loc.name);
+      return `
+        <div class="day-box">
+          <h3><span>${escapeHtml(loc.name)}</span><small>${locItems.length}</small></h3>
+          ${table(["Mould Name", "Notes"], locItems.map((item) => ({ cells: [item.mould_name, item.notes] })))}
+        </div>`;
+    })
+    .join("");
+  const unmatched = items.filter((item) => !locations.some((loc) => loc.name === item.storage_location));
+  const unassigned = unmatched.length
+    ? `<div class="day-box"><h3><span>Unassigned</span></h3>${table(
+        ["Mould Name", "Location", "Notes"],
+        unmatched.map((item) => ({ cells: [item.mould_name, item.storage_location, item.notes] })),
+      )}</div>`
+    : "";
   setPanel(
-    "Mould Inventory (Read-Only)",
+    "Mould Locations (Read-Only)",
     `<button class="ghost" data-refresh>Refresh</button>`,
-    items.length > 0
-      ? table(
-          ["Mould Name", "Location", "Notes"],
-          items.map(item => ({
-            cells: [item.mould_name, item.storage_location, item.notes],
-          }))
-        )
-      : `<div class="empty">No moulds registered.</div>`
+    boxes + unassigned || `<div class="empty">No moulds registered.</div>`,
   );
-  app.querySelector("[data-refresh]")?.addEventListener("click", renderStaffMouldView);
+  app.querySelector("[data-refresh]").addEventListener("click", renderStaffMouldView);
 }
 
 async function renderStaffStockRO() {
