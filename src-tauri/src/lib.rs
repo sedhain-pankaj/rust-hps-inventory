@@ -46,6 +46,7 @@ pub fn run() {
             save_cornice_rate,
             record_clock_event,
             list_clock_events,
+            get_clock_status,
             attendance_today,
             attendance_for_week,
             list_admin_alerts,

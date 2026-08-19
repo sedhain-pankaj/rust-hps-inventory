@@ -488,3 +488,10 @@ pub struct StorageStatus {
     pub disk_free_bytes: u64,
     pub disk_used_pct: f64,
 }
+
+// Clock status for the staff clock button
+#[derive(Debug, Clone, Serialize)]
+pub struct ClockStatus {
+    pub today_state: String,
+    pub missed_yesterday_clock_out: bool,
+}

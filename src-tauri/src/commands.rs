@@ -1180,6 +1180,60 @@ pub async fn list_clock_events(
 }
 
 #[tauri::command]
+pub async fn get_clock_status(
+    state: State<'_, AppState>,
+    employee_id: String,
+) -> CommandResult<ClockStatus> {
+    let today = today_string();
+    let last: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT action FROM time_clock_events
+        WHERE employee_id = ? AND work_date = ?
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(&employee_id)
+    .bind(&today)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    let today_state = match last.as_deref() {
+        Some("clock_in") => "in",
+        Some("clock_out") => "out",
+        _ => "none",
+    }
+    .to_string();
+
+    let yesterday = (Local::now().date_naive() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+    let missed: Option<i64> = sqlx::query_scalar(
+        r#"
+        SELECT 1 FROM time_clock_events t
+        WHERE t.employee_id = ? AND t.work_date = ? AND t.action = 'clock_in'
+          AND NOT EXISTS (
+              SELECT 1 FROM time_clock_events o
+              WHERE o.employee_id = t.employee_id
+                AND o.work_date = t.work_date
+                AND o.action = 'clock_out'
+                AND o.timestamp > t.timestamp
+          )
+        LIMIT 1
+        "#,
+    )
+    .bind(&employee_id)
+    .bind(&yesterday)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(to_string)?;
+
+    Ok(ClockStatus {
+        today_state,
+        missed_yesterday_clock_out: missed.is_some(),
+    })
+}
+
+#[tauri::command]
 pub async fn attendance_today(state: State<'_, AppState>) -> CommandResult<Vec<AttendanceSummary>> {
     attendance_for_date(&state.db, Local::now().date_naive()).await
 }
