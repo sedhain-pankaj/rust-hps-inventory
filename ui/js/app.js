@@ -25,7 +25,6 @@ const state = {
   staffView: "clock",
   selectedEmployee: null,
   stockFilter: "all",
-  selectedRate: null,
   corniceRateMatches: [],
   // Session management
   sessionUser: null,
@@ -695,61 +694,45 @@ async function renderStockPanel() {
   });
 }
 
+let ratesStore = null;
+
 async function renderRatesPanel() {
   const rates = await invoke("list_cornice_rates");
-  const selected = state.selectedRate || {
-    id: null,
-    series: "",
-    model: "",
-    unit_text: "",
-    unit_value: "",
-    is_confidential: true,
-  };
+  const groups = {};
+  for (const rate of rates) {
+    const series = rate.series || "(no series)";
+    (groups[series] ||= []).push(rate);
+  }
+  const seriesNames = Object.keys(groups).sort();
   setPanel(
     "Cornice Rates",
-    `<button class="ghost" data-new-rate>New</button>`,
+    "",
     `
       <form class="form-grid" data-rate-form>
-        <input type="hidden" name="id" value="${escapeHtml(selected.id || "")}" />
-        <label>Series<input name="series" value="${escapeHtml(selected.series)}" /></label>
-        <label>Model<input name="model" value="${escapeHtml(selected.model)}" /></label>
-        <label>Unit Text<input name="unit_text" value="${escapeHtml(selected.unit_text)}" /></label>
-        <label>Unit Value<input name="unit_value" type="number" step="0.01" value="${escapeHtml(selected.unit_value ?? "")}" /></label>
-        <label class="check"><input type="checkbox" name="is_confidential" ${selected.is_confidential ? "checked" : ""} /> Confidential</label>
-        <div class="wide panel-actions"><button class="primary" type="submit">Save Rate</button></div>
+        <label>Series<input name="series" /></label>
+        <label>Model<input name="model" /></label>
+        <label>Unit Text<input name="unit_text" /></label>
+        <label>Unit Value<input name="unit_value" type="number" step="0.01" /></label>
+        <label class="check"><input type="checkbox" name="is_confidential" checked /> Confidential</label>
+        <div class="wide panel-actions"><button class="primary" type="submit">Add Rate</button></div>
       </form>
-      ${table(
-        ["Series", "Model", "Unit", "Value", "Confidential"],
-        rates.map((rate) => ({
-          clickable: true,
-          attrs: `data-rate="${rate.id}"`,
-          cells: [
-            rate.series,
-            rate.model,
-            rate.unit_text,
-            rate.unit_value ?? "",
-            rate.is_confidential ? "Yes" : "No",
-          ],
-        })),
-      )}
+      ${
+        seriesNames
+          .map(
+            (series) => `
+      <h3>${escapeHtml(series)}</h3>
+      <div data-rate-group="${escapeHtml(series)}"></div>`,
+          )
+          .join("") || `<div class="empty">No rates yet.</div>`
+      }
     `,
   );
-  app.querySelector("[data-new-rate]").addEventListener("click", () => {
-    state.selectedRate = null;
-    renderRatesPanel();
-  });
-  app.querySelectorAll("[data-rate]").forEach((row) => {
-    row.addEventListener("click", () => {
-      state.selectedRate = rates.find((rate) => rate.id === Number(row.dataset.rate));
-      renderRatesPanel();
-    });
-  });
   app.querySelector("[data-rate-form]").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    state.selectedRate = await invoke("save_cornice_rate", {
+    await invoke("save_cornice_rate", {
       input: {
-        id: form.get("id") ? Number(form.get("id")) : null,
+        id: null,
         series: form.get("series"),
         model: form.get("model"),
         unit_text: form.get("unit_text"),
@@ -758,6 +741,56 @@ async function renderRatesPanel() {
       },
     });
     renderRatesPanel();
+  });
+
+  if (!ratesStore) {
+    ratesStore = createTableStore({
+      commit: {
+        add: (values) => invoke("save_cornice_rate", { input: { id: null, ...values } }),
+        save: (values) => invoke("save_cornice_rate", { input: values }),
+        remove: (id) => invoke("delete_cornice_rate", { id }),
+      },
+      onDone: () => {
+        ratesStore = null;
+        renderRatesPanel();
+      },
+    });
+  }
+  const store = ratesStore;
+  const mountedRates = {};
+  const firstSeries = seriesNames[0] || "";
+  seriesNames.forEach((series) => {
+    mountedRates[series] = mountInlineTable(
+      app.querySelector(`[data-rate-group="${CSS.escape(series)}"]`),
+      store,
+      {
+        columns: [
+          { key: "series", label: "Series", type: "text", editable: true },
+          { key: "model", label: "Model", type: "text", editable: true },
+          { key: "unit_text", label: "Unit", type: "text", editable: true },
+          { key: "unit_value", label: "Value", type: "number", editable: true, align: "right" },
+          { key: "is_confidential", label: "Confidential", type: "bool", editable: true },
+        ],
+        rows: groups[series],
+        tableId: `series-${CSS.escape(series)}`,
+        emptyText: "No models in this series",
+        actionsEl: app.querySelector("[data-panel-actions]"),
+        refreshFn: renderRatesPanel,
+        extraActions: `<button class="ghost" data-add-rate>${icon("plus", 18)} Add</button>`,
+        onActionsRendered: (el) => {
+          el.querySelector("[data-add-rate]")?.addEventListener("click", () => {
+            store.addNew(`series-${CSS.escape(firstSeries)}`, {
+              series: firstSeries,
+              model: "",
+              unit_text: "",
+              unit_value: null,
+              is_confidential: true,
+            });
+            mountedRates[firstSeries]?.render();
+          });
+        },
+      },
+    );
   });
 }
 
@@ -1672,16 +1705,26 @@ async function renderDriverDispatchView() {
 
 async function renderStaffRates() {
   const rates = await invoke("list_cornice_rates");
+  const groups = {};
+  for (const rate of rates) {
+    const series = rate.series || "(no series)";
+    (groups[series] ||= []).push(rate);
+  }
+  const body =
+    Object.keys(groups)
+      .sort()
+      .map(
+        (series) => `
+      <h3>${escapeHtml(series)}</h3>
+      ${table(["Model", "Unit"], groups[series].map((rate) => ({ cells: [rate.model, rate.unit_text] })))}`,
+      )
+      .join("") || `<div class="empty">No rates yet.</div>`;
   setPanel(
-    "Cornice Rates",
-    "",
-    table(
-      ["Series", "Model", "Unit"],
-      rates.map((rate) => ({
-        cells: [rate.series, rate.model, rate.unit_text],
-      })),
-    ),
+    "Cornice Rates (Read-Only)",
+    `<button class="ghost" data-refresh>Refresh</button>`,
+    body,
   );
+  app.querySelector("[data-refresh]").addEventListener("click", renderStaffRates);
 }
 
 async function renderStaffMouldView() {
