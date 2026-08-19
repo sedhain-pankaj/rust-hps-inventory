@@ -119,6 +119,7 @@ impl AppState {
 
         migrate(&db).await?;
         run_column_migrations(&db).await?;
+        run_data_migrations(&db).await?;
         seed_assets(&db).await?;
         seed_if_needed(&db, &paths).await?;
 
@@ -575,6 +576,127 @@ async fn run_column_migrations(db: &SqlitePool) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn run_data_migrations(db: &SqlitePool) -> Result<()> {
+    // 1. stock_items.reserved (for the merged cornice stock)
+    alter_if_missing(
+        db,
+        "add_reserved_to_stock_items",
+        "stock_items",
+        "reserved",
+        "ALTER TABLE stock_items ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+
+    // 2. cornice_logs amendment tracking
+    alter_if_missing(
+        db,
+        "add_prev_values_to_cornice_logs",
+        "cornice_logs",
+        "prev_values",
+        "ALTER TABLE cornice_logs ADD COLUMN prev_values TEXT",
+    )
+    .await?;
+    alter_if_missing(
+        db,
+        "add_amended_at_to_cornice_logs",
+        "cornice_logs",
+        "amended_at",
+        "ALTER TABLE cornice_logs ADD COLUMN amended_at TEXT",
+    )
+    .await?;
+    alter_if_missing(
+        db,
+        "add_amended_by_to_cornice_logs",
+        "cornice_logs",
+        "amended_by",
+        "ALTER TABLE cornice_logs ADD COLUMN amended_by TEXT",
+    )
+    .await?;
+
+    // 3. mould_locations table + fixed seed locations
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS mould_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+    log_migration(db, "create_mould_locations").await?;
+    for (index, name) in ["Near Dryer", "Singles Wall", "Doubles Wall"].iter().enumerate() {
+        sqlx::query("INSERT OR IGNORE INTO mould_locations (name, sort_order) VALUES (?, ?)")
+            .bind(name)
+            .bind(index as i64)
+            .execute(db)
+            .await?;
+    }
+
+    // 4. Copy cornice_stock rows into stock_items. Idempotent; runs on every
+    //    startup (never logged) so late-arriving legacy rows are still copied.
+    sqlx::query(
+        r#"
+        INSERT INTO stock_items (item_type, model, stock, location, reserved, notes, updated_at)
+        SELECT 'cornice', c.model, c.quantity_in_stock, c.aisle, c.quantity_reserved, c.remarks, ?
+        FROM cornice_stock c
+        WHERE NOT EXISTS (
+            SELECT 1 FROM stock_items s WHERE s.item_type = 'cornice' AND s.model = c.model
+        )
+        "#,
+    )
+    .bind(now_string())
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+async fn alter_if_missing(
+    db: &SqlitePool,
+    migration_id: &str,
+    table: &str,
+    guard_column: &str,
+    sql: &str,
+) -> Result<()> {
+    log_migration_if_unapplied(db, migration_id).await?;
+    let exists: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{guard_column}'"
+    ))
+    .fetch_one(db)
+    .await?;
+    if exists == 0 {
+        sqlx::query(sql).execute(db).await?;
+    }
+    Ok(())
+}
+
+async fn log_migration_if_unapplied(db: &SqlitePool, migration_id: &str) -> Result<bool> {
+    let applied: Option<String> = sqlx::query(
+        "SELECT migration_id FROM _schema_migration_log WHERE migration_id = ?",
+    )
+    .bind(migration_id)
+    .fetch_optional(db)
+    .await?
+    .map(|row| row.get::<String, _>("migration_id"));
+    if applied.is_none() {
+        sqlx::query(
+            "INSERT OR REPLACE INTO _schema_migration_log (migration_id, applied_at) VALUES (?, ?)",
+        )
+        .bind(migration_id)
+        .bind(now_string())
+        .execute(db)
+        .await?;
+    }
+    Ok(applied.is_none())
+}
+
+async fn log_migration(db: &SqlitePool, migration_id: &str) -> Result<()> {
+    log_migration_if_unapplied(db, migration_id).await?;
     Ok(())
 }
 
@@ -1149,4 +1271,93 @@ fn parse_csv(content: &str) -> Vec<Vec<String>> {
     }
 
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn fresh_pool() -> SqlitePool {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap()
+    }
+
+    async fn run_all_migrations(pool: &SqlitePool) {
+        migrate(pool).await.unwrap();
+        run_column_migrations(pool).await.unwrap();
+        run_data_migrations(pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migrations_are_idempotent_and_add_new_columns() {
+        let pool = fresh_pool().await;
+        run_all_migrations(&pool).await;
+        run_all_migrations(&pool).await;
+
+        let reserved: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('stock_items') WHERE name = 'reserved'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reserved, 1);
+
+        for column in ["prev_values", "amended_at", "amended_by"] {
+            let count: i64 = sqlx::query_scalar(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('cornice_logs') WHERE name = '{column}'"
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(count, 1, "column {column} missing");
+        }
+
+        let locations: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM mould_locations").fetch_one(&pool).await.unwrap();
+        assert_eq!(locations, 3);
+        let first: String = sqlx::query_scalar(
+            "SELECT name FROM mould_locations ORDER BY sort_order LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(first, "Near Dryer");
+    }
+
+    #[tokio::test]
+    async fn cornice_stock_rows_copy_into_stock_items_without_duplicates() {
+        let pool = fresh_pool().await;
+        run_all_migrations(&pool).await;
+
+        sqlx::query(
+            "INSERT INTO cornice_stock (model, aisle, quantity_in_stock, quantity_reserved, remarks, updated_at)
+             VALUES ('M1', 'Aisle 1', 5, 2, 'note', '2026-01-01T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_data_migrations(&pool).await.unwrap();
+        run_data_migrations(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM stock_items WHERE item_type = 'cornice' AND model = 'M1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+
+        let (stock, reserved, location): (i64, i64, String) =
+            sqlx::query_as("SELECT stock, reserved, location FROM stock_items WHERE model = 'M1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stock, 5);
+        assert_eq!(reserved, 2);
+        assert_eq!(location, "Aisle 1");
+    }
 }
