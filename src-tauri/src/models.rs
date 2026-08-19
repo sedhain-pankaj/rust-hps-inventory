@@ -80,6 +80,7 @@ pub struct StockItem {
     pub item_type: String,
     pub model: String,
     pub stock: i64,
+    pub reserved: i64,
     pub location: String,
     pub dimensions: String,
     pub photo_path: String,
@@ -92,6 +93,8 @@ pub struct StockItemInput {
     pub item_type: String,
     pub model: String,
     pub stock: i64,
+    #[serde(default)]
+    pub reserved: i64,
     pub location: String,
     pub dimensions: String,
     pub photo_path: String,
@@ -302,6 +305,20 @@ pub struct MouldInventoryInput {
     pub mould_name: String,
     pub storage_location: String,
     pub notes: String,
+}
+
+// Mould Locations
+#[derive(Debug, Clone, Serialize)]
+pub struct MouldLocation {
+    pub id: i64,
+    pub name: String,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MouldLocationInput {
+    pub id: Option<i64>,
+    pub name: String,
 }
 
 // Cornice Stock (separate from generic stock_items)

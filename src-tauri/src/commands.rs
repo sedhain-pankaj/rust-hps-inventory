@@ -880,7 +880,7 @@ pub fn clear_fingerprint_progress(state: State<'_, AppState>) -> CommandResult<(
 pub async fn list_stock_items(state: State<'_, AppState>) -> CommandResult<Vec<StockItem>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, item_type, model, stock, location, dimensions, photo_path, notes
+        SELECT id, item_type, model, stock, reserved, location, dimensions, photo_path, notes
         FROM stock_items
         ORDER BY item_type, model COLLATE NOCASE
         "#,
@@ -896,6 +896,7 @@ pub async fn list_stock_items(state: State<'_, AppState>) -> CommandResult<Vec<S
             item_type: row.get("item_type"),
             model: row.get("model"),
             stock: row.get("stock"),
+            reserved: row.get("reserved"),
             location: row.get("location"),
             dimensions: row.get("dimensions"),
             photo_path: row.get("photo_path"),
@@ -917,7 +918,7 @@ pub async fn save_stock_item(
         sqlx::query(
             r#"
             UPDATE stock_items
-            SET item_type = ?, model = ?, stock = ?, location = ?, dimensions = ?,
+            SET item_type = ?, model = ?, stock = ?, reserved = ?, location = ?, dimensions = ?,
                 photo_path = ?, notes = ?, updated_at = ?
             WHERE id = ?
             "#,
@@ -925,6 +926,7 @@ pub async fn save_stock_item(
         .bind(input.item_type.trim())
         .bind(input.model.trim())
         .bind(input.stock)
+        .bind(input.reserved)
         .bind(input.location.trim())
         .bind(input.dimensions.trim())
         .bind(input.photo_path.trim())
@@ -939,13 +941,14 @@ pub async fn save_stock_item(
         let result = sqlx::query(
             r#"
             INSERT INTO stock_items
-                (item_type, model, stock, location, dimensions, photo_path, notes, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (item_type, model, stock, reserved, location, dimensions, photo_path, notes, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(input.item_type.trim())
         .bind(input.model.trim())
         .bind(input.stock)
+        .bind(input.reserved)
         .bind(input.location.trim())
         .bind(input.dimensions.trim())
         .bind(input.photo_path.trim())
@@ -1026,6 +1029,26 @@ pub async fn save_cornice_rate(
     };
 
     cornice_rate_by_id(&state.db, id).await
+}
+
+#[tauri::command]
+pub async fn delete_stock_item(state: State<'_, AppState>, id: i64) -> CommandResult<()> {
+    sqlx::query("DELETE FROM stock_items WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_cornice_rate(state: State<'_, AppState>, id: i64) -> CommandResult<()> {
+    sqlx::query("DELETE FROM cornice_rates WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1674,6 +1697,101 @@ pub async fn save_mould_inventory(
     };
 
     mould_by_id(&state.db, id).await
+}
+
+#[tauri::command]
+pub async fn delete_mould_inventory(state: State<'_, AppState>, id: i64) -> CommandResult<()> {
+    sqlx::query("DELETE FROM mould_inventory WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+    Ok(())
+}
+
+// ==================== Mould Locations ====================
+
+#[tauri::command]
+pub async fn list_mould_locations(state: State<'_, AppState>) -> CommandResult<Vec<MouldLocation>> {
+    let rows = sqlx::query("SELECT id, name, sort_order FROM mould_locations ORDER BY sort_order, id")
+        .fetch_all(&state.db)
+        .await
+        .map_err(to_string)?;
+    Ok(rows.into_iter().map(mould_location_from_row).collect())
+}
+
+#[tauri::command]
+pub async fn save_mould_location(
+    state: State<'_, AppState>,
+    input: MouldLocationInput,
+) -> CommandResult<MouldLocation> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err("Location name is required.".to_string());
+    }
+    if let Some(id) = input.id {
+        sqlx::query("UPDATE mould_locations SET name = ? WHERE id = ?")
+            .bind(&name)
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .map_err(to_string)?;
+        let row = sqlx::query("SELECT id, name, sort_order FROM mould_locations WHERE id = ?")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(to_string)?;
+        Ok(mould_location_from_row(row))
+    } else {
+        let next: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM mould_locations")
+            .fetch_one(&state.db)
+            .await
+            .map_err(to_string)?;
+        sqlx::query("INSERT INTO mould_locations (name, sort_order) VALUES (?, ?)")
+            .bind(&name)
+            .bind(next)
+            .execute(&state.db)
+            .await
+            .map_err(to_string)?;
+        let row = sqlx::query("SELECT id, name, sort_order FROM mould_locations WHERE name = ? ORDER BY id DESC LIMIT 1")
+            .bind(&name)
+            .fetch_one(&state.db)
+            .await
+            .map_err(to_string)?;
+        Ok(mould_location_from_row(row))
+    }
+}
+
+#[tauri::command]
+pub async fn delete_mould_location(state: State<'_, AppState>, id: i64) -> CommandResult<()> {
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM mould_locations WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(to_string)?;
+    let name = name.ok_or_else(|| "Location not found.".to_string())?;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mould_inventory WHERE storage_location = ?")
+        .bind(&name)
+        .fetch_one(&state.db)
+        .await
+        .map_err(to_string)?;
+    if count > 0 {
+        return Err(format!("Cannot delete: {count} mould(s) are stored in this location."));
+    }
+    sqlx::query("DELETE FROM mould_locations WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(to_string)?;
+    Ok(())
+}
+
+fn mould_location_from_row(row: sqlx::sqlite::SqliteRow) -> MouldLocation {
+    MouldLocation {
+        id: row.get("id"),
+        name: row.get("name"),
+        sort_order: row.get("sort_order"),
+    }
 }
 
 // ==================== Cornice Stock ====================
@@ -2802,7 +2920,7 @@ fn json_to_bool(value: &Value) -> Option<bool> {
 
 async fn stock_item_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<StockItem> {
     let row = sqlx::query(
-        "SELECT id, item_type, model, stock, location, dimensions, photo_path, notes FROM stock_items WHERE id = ?",
+        "SELECT id, item_type, model, stock, reserved, location, dimensions, photo_path, notes FROM stock_items WHERE id = ?",
     )
     .bind(id)
     .fetch_one(db)
@@ -2814,6 +2932,7 @@ async fn stock_item_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<Stock
         item_type: row.get("item_type"),
         model: row.get("model"),
         stock: row.get("stock"),
+        reserved: row.get("reserved"),
         location: row.get("location"),
         dimensions: row.get("dimensions"),
         photo_path: row.get("photo_path"),

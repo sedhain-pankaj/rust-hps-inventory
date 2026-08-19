@@ -65,6 +65,12 @@ pub fn run() {
             // New: mould inventory
             list_mould_inventory,
             save_mould_inventory,
+            delete_stock_item,
+            delete_cornice_rate,
+            delete_mould_inventory,
+            list_mould_locations,
+            save_mould_location,
+            delete_mould_location,
             // New: cornice stock
             list_cornice_stock,
             save_cornice_stock,
