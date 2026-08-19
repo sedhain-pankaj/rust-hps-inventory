@@ -864,31 +864,42 @@ async function renderTimePanel() {
 }
 
 async function renderLogsPanel() {
-  const cornice = await invoke("list_cornice_logs", {
+  const allLogs = await invoke("list_cornice_logs", {
     employeeId: null,
     date: null,
-    weekStart: weekStartIso(),
+    weekStart: null,
   });
+  const weekLogs = allLogs.filter((log) => log.week_start === weekStartIso());
+  const pendingOlder = allLogs.filter(
+    (log) => log.needs_admin_review && log.week_start !== weekStartIso(),
+  );
   const production = await invoke("list_production_logs", { employeeId: null, date: null });
+  const logColumns = ["Date", "Employee", "Model", "Lengths", "Units", "Week Units", ""];
+  const logRow = (log) => ({
+    review: log.needs_admin_review,
+    cells: [
+      log.log_date,
+      log.employee_name,
+      corniceLogCellHtml(log, "model") ?? log.model,
+      corniceLogCellHtml(log, "lengths") ?? String(log.lengths),
+      log.total_units.toFixed(2),
+      log.weekly_units.toFixed(2),
+      log.needs_admin_review
+        ? `<button class="ghost" data-approve-log="${log.id}">Approve</button>`
+        : "",
+    ],
+  });
   setPanel(
     "Daily Logs",
     `<button class="ghost" data-refresh>Refresh</button>`,
     `
       <h3>Cornice Units This Week</h3>
-      ${table(
-        ["Date", "Employee", "Model", "Lengths", "Units", "Week Units"],
-        cornice.map((log) => ({
-          review: log.needs_admin_review,
-          cells: [
-            log.log_date,
-            log.employee_name,
-            log.model,
-            log.lengths,
-            log.total_units.toFixed(2),
-            log.weekly_units.toFixed(2),
-          ],
-        })),
-      )}
+      ${table(logColumns, weekLogs.map(logRow))}
+      ${
+        pendingOlder.length
+          ? `<h3>Pending Approval (previous weeks)</h3>${table(logColumns, pendingOlder.map(logRow))}`
+          : ""
+      }
       <h3>Production Logs</h3>
       ${table(
         ["Date", "Employee", "Item", "Quantity", "Notes"],
@@ -899,6 +910,12 @@ async function renderLogsPanel() {
     `,
   );
   app.querySelector("[data-refresh]").addEventListener("click", renderLogsPanel);
+  app.querySelectorAll("[data-approve-log]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await invoke("approve_cornice_log", { id: Number(button.dataset.approveLog) });
+      renderLogsPanel();
+    });
+  });
 }
 
 async function renderDatabasePanel() {
@@ -2032,7 +2049,12 @@ function table(headers, rows) {
 
 function cellLooksHtml(value) {
   const v = typeof value === "string" ? value.trim() : "";
-  return v.startsWith("<button") || v.startsWith('<span class="tag');
+  return (
+    v.startsWith("<button") ||
+    v.startsWith('<span class="tag') ||
+    v.startsWith('<span class="old-new') ||
+    v.startsWith('<span class="amended-model')
+  );
 }
 
 function fmtBytes(bytes) {
