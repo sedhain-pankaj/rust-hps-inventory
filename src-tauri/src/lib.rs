@@ -75,9 +75,6 @@ pub fn run() {
             list_mould_locations,
             save_mould_location,
             delete_mould_location,
-            // New: cornice stock
-            list_cornice_stock,
-            save_cornice_stock,
             // New: clock event editing
             edit_clock_event,
             list_clock_event_edits,

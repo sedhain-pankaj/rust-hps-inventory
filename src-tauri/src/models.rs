@@ -333,28 +333,6 @@ pub struct MouldLocationInput {
     pub name: String,
 }
 
-// Cornice Stock (separate from generic stock_items)
-#[derive(Debug, Clone, Serialize)]
-pub struct CorniceStock {
-    pub id: i64,
-    pub model: String,
-    pub aisle: String,
-    pub quantity_in_stock: i64,
-    pub quantity_reserved: i64,
-    pub remarks: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CorniceStockInput {
-    pub id: Option<i64>,
-    pub model: String,
-    pub aisle: String,
-    pub quantity_in_stock: i64,
-    pub quantity_reserved: i64,
-    pub remarks: String,
-}
-
 // Clock Event Edit (audit trail)
 #[derive(Debug, Clone, Serialize)]
 pub struct ClockEventEdit {

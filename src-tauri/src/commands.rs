@@ -2035,74 +2035,6 @@ fn mould_location_from_row(row: sqlx::sqlite::SqliteRow) -> MouldLocation {
     }
 }
 
-// ==================== Cornice Stock ====================
-
-#[tauri::command]
-pub async fn list_cornice_stock(state: State<'_, AppState>) -> CommandResult<Vec<CorniceStock>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT id, model, aisle, quantity_in_stock, quantity_reserved, remarks, updated_at
-        FROM cornice_stock
-        ORDER BY model COLLATE NOCASE
-        "#,
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(to_string)?;
-
-    Ok(rows.into_iter().map(cornice_stock_from_row).collect())
-}
-
-#[tauri::command]
-pub async fn save_cornice_stock(
-    state: State<'_, AppState>,
-    input: CorniceStockInput,
-) -> CommandResult<CorniceStock> {
-    if input.model.trim().is_empty() {
-        return Err("Model is required.".to_string());
-    }
-    let now = crate::db::now_string();
-    let id = if let Some(id) = input.id {
-        sqlx::query(
-            r#"
-            UPDATE cornice_stock
-            SET model = ?, aisle = ?, quantity_in_stock = ?, quantity_reserved = ?, remarks = ?, updated_at = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(input.model.trim())
-        .bind(input.aisle.trim())
-        .bind(input.quantity_in_stock)
-        .bind(input.quantity_reserved)
-        .bind(input.remarks.trim())
-        .bind(&now)
-        .bind(id)
-        .execute(&state.db)
-        .await
-        .map_err(to_string)?;
-        id
-    } else {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO cornice_stock (model, aisle, quantity_in_stock, quantity_reserved, remarks, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(input.model.trim())
-        .bind(input.aisle.trim())
-        .bind(input.quantity_in_stock)
-        .bind(input.quantity_reserved)
-        .bind(input.remarks.trim())
-        .bind(&now)
-        .execute(&state.db)
-        .await
-        .map_err(to_string)?;
-        result.last_insert_rowid()
-    };
-
-    cornice_stock_by_id(&state.db, id).await
-}
-
 // ==================== Clock Event Edit (Audit Trail) ====================
 
 #[tauri::command]
@@ -2984,29 +2916,6 @@ async fn mould_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<MouldInven
     .await
     .map_err(to_string)?;
     Ok(mould_from_row(row))
-}
-
-fn cornice_stock_from_row(row: sqlx::sqlite::SqliteRow) -> CorniceStock {
-    CorniceStock {
-        id: row.get("id"),
-        model: row.get("model"),
-        aisle: row.get("aisle"),
-        quantity_in_stock: row.get("quantity_in_stock"),
-        quantity_reserved: row.get("quantity_reserved"),
-        remarks: row.get("remarks"),
-        updated_at: row.get("updated_at"),
-    }
-}
-
-async fn cornice_stock_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<CorniceStock> {
-    let row = sqlx::query(
-        "SELECT id, model, aisle, quantity_in_stock, quantity_reserved, remarks, updated_at FROM cornice_stock WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(db)
-    .await
-    .map_err(to_string)?;
-    Ok(cornice_stock_from_row(row))
 }
 
 fn admin_table_config(name: &str) -> CommandResult<&'static AdminTable> {

@@ -8,6 +8,7 @@ import {
 } from "./api.js";
 import { chooseClockAction, requestAuth } from "./auth.js";
 import { icon } from "./icons.js";
+import { createTableStore, mountInlineTable } from "./table.js";
 
 const app = document.getElementById("app");
 
@@ -23,9 +24,8 @@ const state = {
   enrollmentLog: [],
   staffView: "clock",
   selectedEmployee: null,
-  selectedStock: null,
+  stockFilter: "all",
   selectedRate: null,
-  selectedCorniceStock: null,
   selectedMould: null,
   corniceRateMatches: [],
   // Session management
@@ -314,7 +314,6 @@ async function renderAdminPanel() {
   if (state.adminView === "enroll") return renderEnrollPanel();
   if (state.adminView === "payroll") return renderPayrollPanel();
   if (state.adminView === "dispatch") return renderDispatchOrdersPanel();
-  if (state.adminView === "cornice_stock") return renderCorniceStockPanel();
   if (state.adminView === "mould_inventory") return renderMouldInventoryPanel();
   if (state.adminView === "stock") return renderStockPanel();
   if (state.adminView === "rates") return renderRatesPanel();
@@ -604,66 +603,95 @@ async function renderEnrollPanel() {
 
 async function renderStockPanel() {
   const items = await invoke("list_stock_items");
-  const selected = state.selectedStock || {
-    id: null,
-    item_type: "cornice",
-    model: "",
-    stock: 0,
-    location: "",
-    dimensions: "",
-    photo_path: "",
-    notes: "",
-  };
+  const filter = state.stockFilter || "all";
+  const rows = items.filter((item) =>
+    filter === "all"
+      ? true
+      : filter === "cornice"
+        ? item.item_type === "cornice"
+        : item.item_type !== "cornice",
+  );
+  const store = createTableStore({
+    commit: {
+      add: (values) =>
+        invoke("save_stock_item", {
+          input: {
+            id: null,
+            item_type: values.item_type || "cornice",
+            model: values.model,
+            stock: values.stock,
+            reserved: values.reserved,
+            location: values.location,
+            dimensions: values.dimensions,
+            photo_path: values.photo_path,
+            notes: values.notes,
+          },
+        }),
+      save: (values) =>
+        invoke("save_stock_item", {
+          input: {
+            id: values.id,
+            item_type: values.item_type,
+            model: values.model,
+            stock: values.stock,
+            reserved: values.reserved,
+            location: values.location,
+            dimensions: values.dimensions,
+            photo_path: values.photo_path,
+            notes: values.notes,
+          },
+        }),
+      remove: (id) => invoke("delete_stock_item", { id }),
+    },
+    onDone: renderStockPanel,
+  });
   setPanel(
-    "Stock",
-    `<button class="ghost" data-new-stock>New</button>`,
+    "Stocks",
+    "",
     `
-      <form class="form-grid" data-stock-form>
-        <input type="hidden" name="id" value="${escapeHtml(selected.id || "")}" />
-        <label>Type<input name="item_type" value="${escapeHtml(selected.item_type)}" /></label>
-        <label>Model<input name="model" value="${escapeHtml(selected.model)}" /></label>
-        <label>Stock<input name="stock" type="number" value="${escapeHtml(selected.stock)}" /></label>
-        <label>Location<input name="location" value="${escapeHtml(selected.location)}" /></label>
-        <label>Dimensions<input name="dimensions" value="${escapeHtml(selected.dimensions)}" /></label>
-        <label>Photo Path<input name="photo_path" value="${escapeHtml(selected.photo_path)}" /></label>
-        <label class="wide">Notes<textarea name="notes">${escapeHtml(selected.notes)}</textarea></label>
-        <div class="wide panel-actions"><button class="primary" type="submit">Save Stock</button></div>
-      </form>
-      ${table(
-        ["Type", "Model", "Stock", "Location", "Dimensions"],
-        items.map((item) => ({
-          clickable: true,
-          attrs: `data-stock="${item.id}"`,
-          cells: [item.item_type, item.model, item.stock, item.location, item.dimensions],
-        })),
-      )}
+      <div style="margin-bottom:12px">
+        <select data-stock-filter style="width:160px">
+          <option value="all" ${filter === "all" ? "selected" : ""}>All types</option>
+          <option value="cornice" ${filter === "cornice" ? "selected" : ""}>Cornice</option>
+          <option value="other" ${filter === "other" ? "selected" : ""}>Other</option>
+        </select>
+      </div>
+      <div data-stock-table></div>
     `,
   );
-  app.querySelector("[data-new-stock]").addEventListener("click", () => {
-    state.selectedStock = null;
-    renderStockPanel();
+  const mounted = mountInlineTable(app.querySelector("[data-stock-table]"), store, {
+    columns: [
+      { key: "item_type", label: "Type", type: "select", options: ["cornice", "other"], editable: true },
+      { key: "model", label: "Model", type: "text", editable: true },
+      { key: "location", label: "Location", type: "text", editable: true },
+      { key: "stock", label: "Stock", type: "number", editable: true, align: "right" },
+      { key: "reserved", label: "Reserved", type: "number", editable: true, align: "right" },
+      { key: "notes", label: "Notes", type: "text", editable: true },
+    ],
+    rows,
+    tableId: "main",
+    emptyText: "No stock items",
+    actionsEl: app.querySelector("[data-panel-actions]"),
+    refreshFn: renderStockPanel,
+    extraActions: `<button class="ghost" data-add-stock>${icon("plus", 18)} Add</button>`,
+    onActionsRendered: (el) => {
+      el.querySelector("[data-add-stock]")?.addEventListener("click", () => {
+        store.addNew("main", {
+          item_type: "cornice",
+          model: "",
+          location: "",
+          stock: 0,
+          reserved: 0,
+          notes: "",
+          dimensions: "",
+          photo_path: "",
+        });
+        mounted.render();
+      });
+    },
   });
-  app.querySelectorAll("[data-stock]").forEach((row) => {
-    row.addEventListener("click", () => {
-      state.selectedStock = items.find((item) => item.id === Number(row.dataset.stock));
-      renderStockPanel();
-    });
-  });
-  app.querySelector("[data-stock-form]").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    state.selectedStock = await invoke("save_stock_item", {
-      input: {
-        id: form.get("id") ? Number(form.get("id")) : null,
-        item_type: form.get("item_type"),
-        model: form.get("model"),
-        stock: Number(form.get("stock") || 0),
-        location: form.get("location"),
-        dimensions: form.get("dimensions"),
-        photo_path: form.get("photo_path"),
-        notes: form.get("notes"),
-      },
-    });
+  app.querySelector("[data-stock-filter]").addEventListener("change", (event) => {
+    state.stockFilter = event.currentTarget.value;
     renderStockPanel();
   });
 }
@@ -1064,61 +1092,6 @@ async function renderPayrollPanel() {
   }
 }
 
-// ==================== Admin: Cornice Stock Panel ====================
-
-async function renderCorniceStockPanel() {
-  const items = await invoke("list_cornice_stock");
-  const selected = state.selectedCorniceStock || { id: null, model: "", aisle: "", quantity_in_stock: 0, quantity_reserved: 0, remarks: "" };
-  setPanel(
-    "Cornice Stock",
-    `<button class="ghost" data-new-cornice-stock>New</button>`,
-    `
-      <form class="form-grid" data-cornice-stock-form>
-        <input type="hidden" name="id" value="${selected.id || ''}" />
-        <label>Model<input name="model" value="${escapeHtml(selected.model)}" /></label>
-        <label>Aisle<input name="aisle" value="${escapeHtml(selected.aisle)}" /></label>
-        <label>In Stock<input name="quantity_in_stock" type="number" value="${selected.quantity_in_stock}" /></label>
-        <label>Reserved<input name="quantity_reserved" type="number" value="${selected.quantity_reserved}" /></label>
-        <label class="wide">Remarks<textarea name="remarks">${escapeHtml(selected.remarks)}</textarea></label>
-        <div class="wide panel-actions"><button class="primary" type="submit">Save Stock</button></div>
-      </form>
-      ${table(
-        ["Model", "Aisle", "In Stock", "Reserved", "Remarks"],
-        items.map(item => ({
-          clickable: true,
-          attrs: `data-cornice-stock="${item.id}"`,
-          cells: [item.model, item.aisle, item.quantity_in_stock, item.quantity_reserved, item.remarks],
-        }))
-      )}
-    `
-  );
-  app.querySelector("[data-new-cornice-stock]").addEventListener("click", () => {
-    state.selectedCorniceStock = null;
-    renderCorniceStockPanel();
-  });
-  app.querySelectorAll("[data-cornice-stock]").forEach(row => {
-    row.addEventListener("click", () => {
-      state.selectedCorniceStock = items.find(i => i.id === Number(row.dataset.corniceStock));
-      renderCorniceStockPanel();
-    });
-  });
-  app.querySelector("[data-cornice-stock-form]").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    state.selectedCorniceStock = await invoke("save_cornice_stock", {
-      input: {
-        id: form.get("id") ? Number(form.get("id")) : null,
-        model: form.get("model"),
-        aisle: form.get("aisle"),
-        quantity_in_stock: Number(form.get("quantity_in_stock") || 0),
-        quantity_reserved: Number(form.get("quantity_reserved") || 0),
-        remarks: form.get("remarks"),
-      },
-    });
-    renderCorniceStockPanel();
-  });
-}
-
 // ==================== Admin: Mould Inventory Panel ====================
 
 async function renderMouldInventoryPanel() {
@@ -1316,8 +1289,8 @@ async function renderStaffPanel() {
   if (view === "deliveries") return renderStaffDeliveries();
   if (view === "dispatch") return renderDriverDispatchView();
   if (view === "moulds") return renderStaffMouldView();
-  if (view === "cornice_stock") return renderCorniceStockPanel();
-  if (view === "cornice_stock_ro") return renderStaffCorniceStockRO();
+  if (view === "cornice_stock") return renderStockPanel();
+  if (view === "cornice_stock_ro") return renderStaffStockRO();
   if (view === "payroll") return renderStaffPayroll();
   return renderStaffRates();
 }
@@ -1665,21 +1638,19 @@ async function renderStaffMouldView() {
   app.querySelector("[data-refresh]")?.addEventListener("click", renderStaffMouldView);
 }
 
-async function renderStaffCorniceStockRO() {
-  const items = await invoke("list_cornice_stock");
+async function renderStaffStockRO() {
+  const items = await invoke("list_stock_items");
   setPanel(
-    "Cornice Stock (Read-Only)",
+    "Stocks (Read-Only)",
     `<button class="ghost" data-refresh>Refresh</button>`,
-    items.length > 0
-      ? table(
-          ["Model", "Aisle", "In Stock", "Reserved"],
-          items.map(item => ({
-            cells: [item.model, item.aisle, item.quantity_in_stock, item.quantity_reserved],
-          }))
-        )
-      : `<div class="empty">No cornice stock registered.</div>`
+    table(
+      ["Type", "Model", "Location", "Stock", "Reserved"],
+      items.map((item) => ({
+        cells: [item.item_type, item.model, item.location, item.stock, item.reserved],
+      })),
+    ),
   );
-  app.querySelector("[data-refresh]")?.addEventListener("click", renderStaffCorniceStockRO);
+  app.querySelector("[data-refresh]").addEventListener("click", renderStaffStockRO);
 }
 
 async function renderStaffPayroll() {
