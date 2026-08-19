@@ -294,9 +294,17 @@ function renderAdmin() {
   app.querySelector("[data-back]").addEventListener("click", () => { endSession(); renderHome(); });
   app.querySelectorAll("[data-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.adminView = button.dataset.tab;
-      renderAdmin();
+      switchAdminTab(button.dataset.tab);
     });
+  });
+  renderAdminPanel();
+}
+
+function switchAdminTab(id) {
+  if (id === state.adminView) return;
+  state.adminView = id;
+  app.querySelectorAll("[data-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === id);
   });
   renderAdminPanel();
 }
@@ -1285,9 +1293,17 @@ function renderStaffDashboard() {
   app.querySelector("[data-back]").addEventListener("click", () => { endSession(); renderHome(); });
   app.querySelectorAll("[data-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.staffView = button.dataset.tab;
-      renderStaffDashboard();
+      switchStaffTab(button.dataset.tab);
     });
+  });
+  renderStaffPanel();
+}
+
+function switchStaffTab(id) {
+  if (id === state.staffView) return;
+  state.staffView = id;
+  app.querySelectorAll("[data-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tab === id);
   });
   renderStaffPanel();
 }
