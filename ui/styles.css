@@ -1054,3 +1054,101 @@ label {
     display: none;
   }
 }
+
+/* ---------- Inline editable tables ---------- */
+
+.table td.editable {
+  cursor: pointer;
+}
+
+.table td.editable:hover {
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+
+.itable td input,
+.itable td select {
+  padding: 8px 10px;
+  min-height: 0;
+}
+
+.table tr.dirty td {
+  background: var(--brass-tint);
+}
+
+.table tr.staged-delete td {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.table td.num,
+.table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.table .row-actions {
+  width: 48px;
+}
+
+.table .row-actions button {
+  min-height: 36px;
+  padding: 0 8px;
+}
+
+.table .row-actions button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.old-new s {
+  color: var(--text-3);
+}
+
+.amended {
+  color: var(--brass);
+  cursor: help;
+  margin-left: 4px;
+}
+
+/* ---------- Week / day boxes (staff log, mould locations) ---------- */
+
+.week-box {
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-l);
+  padding: 16px;
+  margin-bottom: 18px;
+  background: var(--bg-0);
+}
+
+.day-box {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  padding: 14px;
+  margin-bottom: 14px;
+  background: var(--bg-1);
+}
+
+.week-box > h3,
+.day-box > h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-1);
+}
+
+.week-box > h3 small,
+.day-box > h3 small {
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.day-box:last-child {
+  margin-bottom: 0;
+}
