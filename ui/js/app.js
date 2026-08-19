@@ -47,6 +47,7 @@ async function loadStatus() {
   try {
     state.status = await invoke("app_status");
     state.logoDataUrl = await invoke("get_asset_data_url", { key: "hps_logo" });
+    invoke("storage_status").catch(() => {});
   } catch (error) {
     state.status = {
       fingerprint_helper_found: false,
@@ -906,6 +907,8 @@ async function renderDatabasePanel() {
     state.adminDbTable = tables[0]?.name || "employees";
   }
   const data = await invoke("list_admin_table_rows", { table: state.adminDbTable });
+  const storage = await invoke("storage_status");
+  const storageLine = `<div class="message">DB ${fmtBytes(storage.db_size_bytes)} · Disk ${Math.round(storage.disk_used_pct)}% used · ${fmtBytes(storage.disk_free_bytes)} free</div>`;
   const readOnly = !data.editable;
   const selected =
     state.selectedDbRow && state.selectedDbRow.table === data.table
@@ -929,7 +932,8 @@ async function renderDatabasePanel() {
       ${readOnly ? '' : `<button class="ghost" data-new-db-row>New Row</button>`}
       <button class="ghost" data-refresh>Refresh</button>
     `,
-    readOnly
+    storageLine +
+      (readOnly
       ? `<div class="message">This table is read-only. Use the dedicated panel to manage records.</div>
          ${table(
            visibleColumns.map((column) => column.label),
@@ -959,7 +963,8 @@ async function renderDatabasePanel() {
             cells: visibleColumns.map((column) => dbDisplay(column.name, row.values[column.name])),
           })),
         )}
-     `,
+     `
+      ),
   );
 
   app.querySelector("[data-db-table]").addEventListener("change", (event) => {
@@ -1928,6 +1933,18 @@ function table(headers, rows) {
 function cellLooksHtml(value) {
   const v = typeof value === "string" ? value.trim() : "";
   return v.startsWith("<button") || v.startsWith('<span class="tag');
+}
+
+function fmtBytes(bytes) {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = Number(bytes);
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${value >= 100 || index === 0 ? Math.round(value) : value.toFixed(1)} ${units[index]}`;
 }
 
 function fingerOptions(selected = "right-index") {
