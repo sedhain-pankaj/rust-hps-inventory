@@ -590,6 +590,36 @@ label {
   margin-top: 0;
 }
 
+.rate-series-layout,
+.location-series-layout {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  align-items: flex-start;
+  padding-bottom: 10px;
+  scrollbar-width: auto;
+}
+
+.rate-group,
+.location-series-layout .day-box {
+  flex: 0 0 min(560px, 82vw);
+  min-width: 0;
+  margin: 0;
+}
+
+.rate-group h3,
+.location-series-layout .day-box h3 {
+  margin-top: 0;
+}
+
+.search-match-label {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
 /* ---------- Tables ---------- */
 
 .table-wrap {
@@ -604,6 +634,16 @@ label {
   border-collapse: collapse;
   font-size: 0.95rem;
   font-variant-numeric: tabular-nums;
+}
+
+.itable .row-actions {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.itable .row-actions button {
+  min-height: 36px;
+  padding: 0 9px;
 }
 
 .table th,

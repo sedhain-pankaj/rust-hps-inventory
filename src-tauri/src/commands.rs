@@ -1467,7 +1467,7 @@ pub async fn add_cornice_log(
         Some(rate) => (rate.series, rate.unit_text, rate.unit_value, false),
         None => (input.series.trim().to_string(), String::new(), None, true),
     };
-    let total_units = unit_value.unwrap_or(0.0) * input.lengths as f64;
+    let total_units = (unit_value.unwrap_or(0.0) * input.lengths as f64 * 100.0).round() / 100.0;
     let needs_review = is_custom || unit_value.is_none();
 
     let result = sqlx::query(
@@ -1572,7 +1572,7 @@ pub async fn update_cornice_log(
         Some(rate) => (rate.series, rate.unit_text, rate.unit_value, false),
         None => (input.series.trim().to_string(), String::new(), None, true),
     };
-    let total_units = unit_value.unwrap_or(0.0) * input.lengths as f64;
+    let total_units = (unit_value.unwrap_or(0.0) * input.lengths as f64 * 100.0).round() / 100.0;
     let now = crate::db::now_string();
 
     let mut prev = serde_json::Map::new();
@@ -2005,12 +2005,15 @@ pub async fn save_mould_location(
 
 #[tauri::command]
 pub async fn delete_mould_location(state: State<'_, AppState>, id: i64) -> CommandResult<()> {
-    let name: Option<String> = sqlx::query_scalar("SELECT name FROM mould_locations WHERE id = ?")
+    let location: Option<(String, i64)> = sqlx::query_as("SELECT name, sort_order FROM mould_locations WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
         .await
         .map_err(to_string)?;
-    let name = name.ok_or_else(|| "Location not found.".to_string())?;
+    let (name, sort_order) = location.ok_or_else(|| "Location not found.".to_string())?;
+    if sort_order < 3 {
+        return Err("The three permanent mould locations cannot be deleted.".to_string());
+    }
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mould_inventory WHERE storage_location = ?")
         .bind(&name)
         .fetch_one(&state.db)
@@ -2191,10 +2194,6 @@ pub async fn search_cornice_rates(
     request: SearchCorniceRatesRequest,
 ) -> CommandResult<SearchCorniceRatesResponse> {
     let query = request.query.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return Ok(SearchCorniceRatesResponse { matches: Vec::new() });
-    }
-
     // Get all rates and do fuzzy matching in Rust (Levenshtein-like scoring)
     let rows = sqlx::query(
         r#"
@@ -2213,7 +2212,9 @@ pub async fn search_cornice_rates(
         let model_lower = model.to_ascii_lowercase();
 
         // Scoring: exact match, starts_with, contains, levenshtein-like
-        let score = if model_lower == query {
+        let score = if query.is_empty() {
+            1
+        } else if model_lower == query {
             1000
         } else if model_lower.starts_with(&query) {
             500
@@ -2321,13 +2322,10 @@ pub async fn get_payroll_week(
 
     let total_units_unknown: f64 = unknown_details.iter().map(|d| d.quantity as f64).sum();
 
-    // Attendance-adjusted threshold (§5.4)
-    let (unit_threshold, threshold_note, needs_review_hours) = if (39.0..=41.0).contains(&total_hours) || total_hours == 0.0 {
-        (180.0, "Standard week (39-41 hr band or no hours)".to_string(), false)
-    } else {
-        let prorated = total_hours * 4.5;
-        (prorated, format!("Prorated: {:.1} hrs × 4.5 = {:.1} units (outside 39-41 hr band)", total_hours, prorated), true)
-    };
+    // Payroll always includes the first 180 made units in base pay.
+    let unit_threshold = 180.0;
+    let threshold_note = "First 180 made units included in base pay".to_string();
+    let needs_review_hours = false;
 
     // Base pay
     let base_pay = 1140.0_f64;
@@ -2540,7 +2538,7 @@ pub async fn resolve_unknown_rate(
     sqlx::query(
         r#"
         UPDATE cornice_logs
-        SET unit_value = ?, total_units = lengths * ?, is_custom = 0, needs_admin_review = 0, updated_at = ?
+        SET unit_value = ?, total_units = ROUND(lengths * ?, 2), is_custom = 0, needs_admin_review = 0, updated_at = ?
         WHERE lower(model) = lower(?) AND (is_custom = 1 OR unit_value IS NULL)
         "#,
     )
@@ -2630,12 +2628,9 @@ async fn get_payroll_week_inner(
         }
     }
 
-    let (unit_threshold, threshold_note, needs_review_hours) = if (39.0..=41.0).contains(&total_hours) || total_hours == 0.0 {
-        (180.0, "Standard week".to_string(), false)
-    } else {
-        let prorated = total_hours * 4.5;
-        (prorated, format!("Prorated: {:.1} hrs × 4.5", total_hours), true)
-    };
+    let unit_threshold = 180.0;
+    let threshold_note = "First 180 made units included in base pay".to_string();
+    let needs_review_hours = false;
 
     let base_pay = 1140.0_f64;
     let (gross_pay, extra_unit_pay, pay_equation, status) = if !unknown_details.is_empty() {

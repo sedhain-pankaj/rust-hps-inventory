@@ -707,62 +707,42 @@ async function renderRatesPanel() {
     (groups[series] ||= []).push(rate);
   }
   const seriesNames = Object.keys(groups).sort();
+  const displaySeriesNames = seriesNames.length ? seriesNames : ["New series"];
   setPanel(
     "Cornice Rates",
-    "",
+    `<button class="ghost" data-add-rate>${icon("plus", 18)} Add rate</button>`,
     `
-      <form class="form-grid" data-rate-form>
-        <label>Series<input name="series" /></label>
-        <label>Model<input name="model" /></label>
-        <label>Unit Text<input name="unit_text" /></label>
-        <label>Unit Value<input name="unit_value" type="number" step="0.01" /></label>
-        <label class="check"><input type="checkbox" name="is_confidential" checked /> Confidential</label>
-        <div class="wide panel-actions"><button class="primary" type="submit">Add Rate</button></div>
-      </form>
+      <div class="rate-series-layout">
       ${
-        seriesNames
+        displaySeriesNames
           .map(
             (series) => `
-      <h3>${escapeHtml(series)}</h3>
-      <div data-rate-group="${escapeHtml(series)}"></div>`,
+      <section class="rate-group">
+        <h3>${escapeHtml(series)}</h3>
+        <div data-rate-group="${escapeHtml(series)}"></div>
+      </section>`,
           )
           .join("") || `<div class="empty">No rates yet.</div>`
       }
+      </div>
     `,
   );
-  app.querySelector("[data-rate-form]").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await invoke("save_cornice_rate", {
-      input: {
-        id: null,
-        series: form.get("series"),
-        model: form.get("model"),
-        unit_text: form.get("unit_text"),
-        unit_value: form.get("unit_value") ? Number(form.get("unit_value")) : null,
-        is_confidential: form.get("is_confidential") === "on",
-      },
-    });
-    renderRatesPanel();
-  });
 
-  if (!ratesStore) {
-    ratesStore = createTableStore({
-      commit: {
-        add: (values) => invoke("save_cornice_rate", { input: { id: null, ...values } }),
-        save: (values) => invoke("save_cornice_rate", { input: values }),
-        remove: (id) => invoke("delete_cornice_rate", { id }),
-      },
-      onDone: () => {
-        ratesStore = null;
-        renderRatesPanel();
-      },
-    });
-  }
+  ratesStore = createTableStore({
+    commit: {
+      add: (values) => invoke("save_cornice_rate", { input: { id: null, ...values } }),
+      save: (values) => invoke("save_cornice_rate", { input: values }),
+      remove: (id) => invoke("delete_cornice_rate", { id }),
+    },
+    onDone: () => {
+      ratesStore = null;
+      renderRatesPanel();
+    },
+  });
   const store = ratesStore;
   const mountedRates = {};
-  const firstSeries = seriesNames[0] || "";
-  seriesNames.forEach((series) => {
+  const firstSeries = displaySeriesNames[0];
+  displaySeriesNames.forEach((series) => {
     mountedRates[series] = mountInlineTable(
       app.querySelector(`[data-rate-group="${CSS.escape(series)}"]`),
       store,
@@ -774,26 +754,31 @@ async function renderRatesPanel() {
           { key: "unit_value", label: "Value", type: "number", editable: true, align: "right" },
           { key: "is_confidential", label: "Confidential", type: "bool", editable: true },
         ],
-        rows: groups[series],
+        rows: groups[series] || [],
         tableId: `series-${CSS.escape(series)}`,
         emptyText: "No models in this series",
         actionsEl: app.querySelector("[data-panel-actions]"),
         refreshFn: renderRatesPanel,
-        extraActions: `<button class="ghost" data-add-rate>${icon("plus", 18)} Add</button>`,
-        onActionsRendered: (el) => {
-          el.querySelector("[data-add-rate]")?.addEventListener("click", () => {
-            store.addNew(`series-${CSS.escape(firstSeries)}`, {
-              series: firstSeries,
-              model: "",
-              unit_text: "",
-              unit_value: null,
-              is_confidential: true,
-            });
-            mountedRates[firstSeries]?.render();
-          });
-        },
+        extraActions: "",
       },
     );
+  });
+  const actionsEl = app.querySelector("[data-panel-actions]");
+  store.renderActions(actionsEl, {
+    refreshFn: renderRatesPanel,
+    extraActions: `<button class="ghost" data-add-rate>${icon("plus", 18)} Add rate</button>`,
+  });
+  actionsEl.querySelector("[data-add-rate]")?.addEventListener("click", () => {
+    const targetSeries = firstSeries || "New series";
+    store.addNew(`series-${CSS.escape(targetSeries)}`, {
+      series: targetSeries,
+      model: "",
+      unit_text: "",
+      unit_value: null,
+      is_confidential: true,
+    });
+    if (mountedRates[firstSeries]) mountedRates[firstSeries].render();
+    else renderRatesPanel();
   });
 }
 
@@ -1178,7 +1163,7 @@ async function renderMouldLocationsPanel() {
             <span>${escapeHtml(loc.name)} <small>(${locItems.length})</small></span>
             <span style="display:flex;gap:8px">
               <button class="ghost" data-add-mould="${escapeHtml(loc.name)}" style="min-height:36px">${icon("plus", 16)} Add</button>
-              <button class="icon ghost" data-del-loc="${loc.id}" title="Delete location (only if empty)">${icon("x", 16)}</button>
+              ${loc.sort_order >= 3 ? `<button class="icon ghost" data-del-loc="${loc.id}" title="Delete location (only if empty)">${icon("x", 16)}</button>` : ""}
             </span>
           </h3>
           <div data-mould-table="${escapeHtml(loc.name)}"></div>
@@ -1193,7 +1178,7 @@ async function renderMouldLocationsPanel() {
         <div data-mould-table="unassigned"></div>
       </div>`
     : "";
-  setPanel("Mould Locations", "", boxes + unassigned || `<div class="empty">No moulds registered.</div>`);
+  setPanel("Mould Locations", "", `<div class="location-series-layout">${boxes}${unassigned}</div>` || `<div class="empty">No moulds registered.</div>`);
 
   if (!mouldStore) {
     mouldStore = createTableStore({
@@ -1250,8 +1235,8 @@ async function renderMouldLocationsPanel() {
       mounted[loc.name].render();
     });
   });
-  locations.forEach((loc) => {
-    app.querySelector(`[data-del-loc="${loc.id}"]`).addEventListener("click", async () => {
+  locations.filter((loc) => loc.sort_order >= 3).forEach((loc) => {
+    app.querySelector(`[data-del-loc="${loc.id}"]`)?.addEventListener("click", async () => {
       if (!confirm(`Delete location "${loc.name}"? Only works when it has no moulds.`)) return;
       try {
         await invoke("delete_mould_location", { id: loc.id });
@@ -1463,7 +1448,9 @@ async function renderStaffClock(message = "") {
       });
       renderStaffClock(`${formatAction(result.action)} recorded at ${result.timestamp.slice(11)}`);
     } catch (error) {
-      if (String(error.message || error) !== "Cancelled.") {
+      if (String(error.message || error) === "Cancelled.") {
+        event.currentTarget.disabled = false;
+      } else {
         renderStaffClock(String(error.message || error));
       }
     } finally {
@@ -1494,9 +1481,19 @@ function bindCorniceModelSearch() {
         state.corniceRateMatches = resp.matches || [];
         const box = app.querySelector("#cornice-search-results");
         if (!box) return;
-        box.textContent = (resp.matches || []).length
-          ? `${resp.matches.length} match(es) — pick from the dropdown or keep typing.`
+        box.innerHTML = (resp.matches || []).length
+          ? `<label class="search-match-label">${resp.matches.length} match(es)<select data-rate-match><option value="">Pick a rate...</option>${resp.matches
+              .map((match, index) => `<option value="${index}">${escapeHtml(match.series ? `${match.series} · ` : "")}${escapeHtml(match.model)} · ${escapeHtml(match.unit_text || "Custom")}</option>`)
+              .join("")}</select></label>`
           : "No match found — will be logged as unknown/custom.";
+        box.querySelector("[data-rate-match]")?.addEventListener("change", (event) => {
+          const match = state.corniceRateMatches[Number(event.currentTarget.value)];
+          const modelInput = app.querySelector('input[data-key="model"]:focus') || app.querySelector('input[data-key="model"]');
+          if (!match || !modelInput) return;
+          modelInput.value = match.model;
+          modelInput.dispatchEvent(new Event("change", { bubbles: true }));
+          box.insertAdjacentHTML("beforeend", `<div class="message">${escapeHtml(match.unit_text || "Custom")} selected</div>`);
+        });
         box.style.display = "block";
       } catch {
         /* ignore */
@@ -1561,6 +1558,7 @@ async function renderStaffCornice() {
 
   try {
     const resp = await invoke("search_cornice_rates", { request: { query: "" } });
+    state.corniceRateMatches = resp.matches || [];
     app.querySelector("#staff-cornice-models").innerHTML = (resp.matches || [])
       .map(
         (match) =>
@@ -1843,15 +1841,17 @@ async function renderStaffRates() {
     const series = rate.series || "(no series)";
     (groups[series] ||= []).push(rate);
   }
-  const body =
-    Object.keys(groups)
+  const seriesNames = Object.keys(groups).sort();
+  const body = seriesNames.length
+    ? `<div class="rate-series-layout">${seriesNames
       .sort()
       .map(
         (series) => `
-      <h3>${escapeHtml(series)}</h3>
-      ${table(["Model", "Unit"], groups[series].map((rate) => ({ cells: [rate.model, rate.unit_text] })))}`,
+      <section class="rate-group"><h3>${escapeHtml(series)}</h3>
+      ${table(["Model", "Unit"], groups[series].map((rate) => ({ cells: [rate.model, rate.unit_text] })))}</section>`,
       )
-      .join("") || `<div class="empty">No rates yet.</div>`;
+      .join("")}</div>`
+    : `<div class="empty">No rates yet.</div>`;
   setPanel(
     "Cornice Rates (Read-Only)",
     `<button class="ghost" data-refresh>Refresh</button>`,
@@ -2100,6 +2100,15 @@ function parsePrevValues(log) {
 // Raw-HTML cell for cornice log Model/Lengths cells (pending old→new, ✎ cue, staged delete).
 // Returns null → caller falls back to the plain escaped value.
 function corniceLogCellHtml(log, key) {
+  const rateMatch = state.corniceRateMatches.find(
+    (rate) => rate.model.toLowerCase() === String(log.model || "").trim().toLowerCase(),
+  );
+  if (key === "unit_text" && !log.unit_text && rateMatch) {
+    return escapeHtml(rateMatch.unit_text || "Custom");
+  }
+  if (key === "total_units" && rateMatch && log.lengths != null) {
+    return (Math.round(Number(rateMatch.unit_value || 0) * Number(log.lengths) * 100) / 100).toFixed(2);
+  }
   const prev = parsePrevValues(log);
   if (prev && prev.deleted) {
     return `<span class="old-new"><s>${escapeHtml(log.model)}</s> <span class="tag warn">pending deletion</span></span>`;

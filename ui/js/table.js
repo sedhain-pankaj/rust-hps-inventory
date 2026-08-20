@@ -15,6 +15,7 @@ export function createTableStore({ commit, onDone }) {
         values: null,
         dirty: false,
         deleted: false,
+        editing: false,
         isNew: false,
         tableId: null,
       });
@@ -30,6 +31,7 @@ export function createTableStore({ commit, onDone }) {
       values: { ...defaults },
       dirty: true,
       deleted: false,
+      editing: true,
       isNew: true,
       tableId,
     });
@@ -232,12 +234,13 @@ export function mountInlineTable(rootEl, store, config) {
                     ${columns
                       .map(
                         (col) => `
-                        <td data-cell data-key="${col.key}" class="${col.editable && canEdit(row) ? "editable" : ""} ${col.align === "right" ? "num" : ""}">
+                        <td data-cell data-key="${col.key}" class="${col.editable && canEdit(row) && draft?.editing ? "editable" : ""} ${col.align === "right" ? "num" : ""}">
                           ${displayCell(row, col)}
                         </td>`,
                       )
                       .join("")}
                     <td class="row-actions">
+                        ${canEdit(row) && !draft?.editing ? `<button class="icon ghost" data-edit-row title="Edit">${icon("more", 16)}</button>` : ""}
                       ${canDelete(row) ? `<button class="icon ghost" data-del title="Delete">${icon("x", 16)}</button>` : ""}
                     </td>
                   </tr>`;
@@ -291,6 +294,15 @@ export function mountInlineTable(rootEl, store, config) {
   }
 
   function bind() {
+    rootEl.querySelectorAll("[data-edit-row]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = findRow(btn.closest("tr"));
+        const draft = row && store.draftFor(row);
+        if (!draft) return;
+        draft.editing = true;
+        render();
+      });
+    });
     rootEl.querySelectorAll("td.editable").forEach((td) => {
       td.addEventListener("click", () => startEdit(td));
     });
@@ -304,6 +316,7 @@ export function mountInlineTable(rootEl, store, config) {
         render();
       });
     });
+
   }
 
   render();
