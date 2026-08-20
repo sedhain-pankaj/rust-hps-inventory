@@ -9,6 +9,7 @@ import {
 import { confirmModal, requestAuth } from "./auth.js";
 import { icon } from "./icons.js";
 import { createTableStore, mountInlineTable } from "./table.js";
+import { mountRatesCardGrid, openRateAddModal } from "./rates-cards.js";
 
 const app = document.getElementById("app");
 
@@ -710,20 +711,21 @@ async function renderRatesPanel() {
   const displaySeriesNames = seriesNames.length ? seriesNames : ["New series"];
   setPanel(
     "Cornice Rates",
-    `<button class="ghost" data-add-rate>${icon("plus", 18)} Add rate</button>`,
+    "",
     `
       <div class="rate-series-layout">
-      ${
-        displaySeriesNames
-          .map(
-            (series) => `
-      <section class="rate-group">
-        <h3>${escapeHtml(series)}</h3>
-        <div data-rate-group="${escapeHtml(series)}"></div>
-      </section>`,
-          )
-          .join("") || `<div class="empty">No rates yet.</div>`
-      }
+      ${displaySeriesNames
+        .map(
+          (series) => `
+        <section class="rate-group">
+          <div class="rate-group-head">
+            <h3>${escapeHtml(series)}</h3>
+            <button class="icon ghost" data-rate-add data-series="${escapeHtml(series)}" title="Add cornice">${icon("plus", 18)}</button>
+          </div>
+          <div data-rate-group="${escapeHtml(series)}"></div>
+        </section>`,
+        )
+        .join("")}
       </div>
     `,
   );
@@ -740,46 +742,45 @@ async function renderRatesPanel() {
     },
   });
   const store = ratesStore;
-  const mountedRates = {};
-  const firstSeries = displaySeriesNames[0];
+  const actionsEl = app.querySelector("[data-panel-actions]");
+  const mounted = {};
   displaySeriesNames.forEach((series) => {
-    mountedRates[series] = mountInlineTable(
+    mounted[series] = mountRatesCardGrid(
       app.querySelector(`[data-rate-group="${CSS.escape(series)}"]`),
       store,
       {
-        columns: [
-          { key: "series", label: "Series", type: "text", editable: true },
-          { key: "model", label: "Model", type: "text", editable: true },
-          { key: "unit_text", label: "Unit", type: "text", editable: true },
-          { key: "unit_value", label: "Value", type: "number", editable: true, align: "right" },
-          { key: "is_confidential", label: "Confidential", type: "bool", editable: true },
-        ],
         rows: groups[series] || [],
+        series,
         tableId: `series-${CSS.escape(series)}`,
-        emptyText: "No models in this series",
-        actionsEl: app.querySelector("[data-panel-actions]"),
+        editable: true,
+        actionsEl,
         refreshFn: renderRatesPanel,
-        extraActions: "",
       },
     );
   });
-  const actionsEl = app.querySelector("[data-panel-actions]");
-  store.renderActions(actionsEl, {
-    refreshFn: renderRatesPanel,
-    extraActions: `<button class="ghost" data-add-rate>${icon("plus", 18)} Add rate</button>`,
-  });
-  actionsEl.querySelector("[data-add-rate]")?.addEventListener("click", () => {
-    const targetSeries = firstSeries || "New series";
-    store.addNew(`series-${CSS.escape(targetSeries)}`, {
-      series: targetSeries,
-      model: "",
-      unit_text: "",
-      unit_value: null,
-      is_confidential: true,
+  store.renderActions(actionsEl, { refreshFn: renderRatesPanel });
+
+  app.querySelectorAll("[data-rate-add]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const series = btn.dataset.series;
+      openRateAddModal(series, (values) => {
+        store.addNew(`series-${CSS.escape(series)}`, { series, ...values });
+        mounted[series].render();
+        store.renderActions(actionsEl, { refreshFn: renderRatesPanel });
+      });
     });
-    if (mountedRates[firstSeries]) mountedRates[firstSeries].render();
-    else renderRatesPanel();
   });
+  ensureRateMenuListener();
+}
+
+let rateMenuListenerAdded = false;
+function ensureRateMenuListener() {
+  if (rateMenuListenerAdded) return;
+  rateMenuListenerAdded = true;
+  document.addEventListener("click", closeAllRateMenus);
+}
+function closeAllRateMenus() {
+  app.querySelectorAll(".rate-card-popover").forEach((m) => m.remove());
 }
 
 async function renderTimePanel() {
