@@ -120,6 +120,7 @@ impl AppState {
         migrate(&db).await?;
         run_column_migrations(&db).await?;
         run_data_migrations(&db).await?;
+        run_cornice_unit_migrations(&db).await?;
         seed_assets(&db).await?;
         seed_if_needed(&db, &paths).await?;
 
@@ -258,9 +259,7 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             series TEXT NOT NULL,
             model TEXT NOT NULL,
-            unit_text TEXT NOT NULL,
-            unit_value REAL,
-            is_confidential INTEGER NOT NULL DEFAULT 1,
+            unit TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE (series, model)
         );
@@ -316,7 +315,7 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
             series TEXT NOT NULL,
             model TEXT NOT NULL,
             lengths INTEGER NOT NULL,
-            unit_text TEXT NOT NULL DEFAULT '',
+            unit TEXT NOT NULL DEFAULT '',
             unit_value REAL,
             total_units REAL NOT NULL DEFAULT 0,
             is_custom INTEGER NOT NULL DEFAULT 0,
@@ -656,6 +655,82 @@ async fn run_data_migrations(db: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+pub async fn column_exists(db: &SqlitePool, table: &str, column: &str) -> bool {
+    let cnt: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = '{column}'"
+    ))
+    .fetch_one(db)
+    .await
+    .unwrap_or(0);
+    cnt > 0
+}
+
+async fn split_ambiguous_cornice_units(db: &SqlitePool) -> Result<()> {
+    let rows = sqlx::query(
+        "SELECT id, series, model, unit FROM cornice_rates
+         WHERE unit LIKE '% or %' AND model NOT LIKE '% (ambg %'",
+    )
+    .fetch_all(db)
+    .await?;
+    let now = now_string();
+    for row in rows {
+        let id: i64 = row.get("id");
+        let series: String = row.get("series");
+        let model: String = row.get("model");
+        let unit: String = row.get("unit");
+        let expanded = expand_ambiguous(&model, &unit);
+        if expanded.len() <= 1 {
+            continue;
+        }
+        sqlx::query("UPDATE cornice_rates SET model = ?, unit = ? WHERE id = ?")
+            .bind(&expanded[0].0)
+            .bind(&expanded[0].1)
+            .bind(id)
+            .execute(db)
+            .await?;
+        for (m, u) in &expanded[1..] {
+            sqlx::query(
+                "INSERT OR IGNORE INTO cornice_rates (series, model, unit, updated_at) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&series)
+            .bind(m)
+            .bind(u)
+            .bind(&now)
+            .execute(db)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn run_cornice_unit_migrations(db: &SqlitePool) -> Result<()> {
+    if column_exists(db, "cornice_rates", "is_confidential").await {
+        sqlx::query("ALTER TABLE cornice_rates DROP COLUMN is_confidential").execute(db).await?;
+    }
+    if column_exists(db, "cornice_rates", "unit_text").await
+        && !column_exists(db, "cornice_rates", "unit").await
+    {
+        sqlx::query("ALTER TABLE cornice_rates RENAME COLUMN unit_text TO unit")
+            .execute(db)
+            .await?;
+    }
+    if column_exists(db, "cornice_rates", "unit_value").await {
+        sqlx::query("ALTER TABLE cornice_rates DROP COLUMN unit_value").execute(db).await?;
+    }
+    split_ambiguous_cornice_units(db).await?;
+    sqlx::query("UPDATE cornice_rates SET unit = 'Unknown' WHERE trim(unit) = '??'")
+        .execute(db)
+        .await?;
+    if column_exists(db, "cornice_logs", "unit_text").await
+        && !column_exists(db, "cornice_logs", "unit").await
+    {
+        sqlx::query("ALTER TABLE cornice_logs RENAME COLUMN unit_text TO unit")
+            .execute(db)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn alter_if_missing(
     db: &SqlitePool,
     migration_id: &str,
@@ -815,22 +890,23 @@ async fn seed_cornice_rates(db: &SqlitePool) -> Result<()> {
         while index + 1 < headers.len() {
             let series = clean_series(headers.get(index).cloned().unwrap_or_default());
             let model = row.get(index).map(clean_cell).unwrap_or_default();
-            let unit_text = row.get(index + 1).map(clean_cell).unwrap_or_default();
+            let unit = row.get(index + 1).map(clean_cell).unwrap_or_default();
             if !series.is_empty() && !model.is_empty() {
-                sqlx::query(
-                    r#"
-                    INSERT OR IGNORE INTO cornice_rates
-                        (series, model, unit_text, unit_value, is_confidential, updated_at)
-                    VALUES (?, ?, ?, ?, 1, ?)
-                    "#,
-                )
-                .bind(series)
-                .bind(model)
-                .bind(&unit_text)
-                .bind(first_number(&unit_text))
-                .bind(&now)
-                .execute(db)
-                .await?;
+                for (m, u) in expand_ambiguous(&model, &unit) {
+                    sqlx::query(
+                        r#"
+                        INSERT OR IGNORE INTO cornice_rates
+                            (series, model, unit, updated_at)
+                        VALUES (?, ?, ?, ?)
+                        "#,
+                    )
+                    .bind(&series)
+                    .bind(&m)
+                    .bind(&u)
+                    .bind(&now)
+                    .execute(db)
+                    .await?;
+                }
             }
             index += 2;
         }
@@ -1333,6 +1409,7 @@ mod tests {
         migrate(pool).await.unwrap();
         run_column_migrations(pool).await.unwrap();
         run_data_migrations(pool).await.unwrap();
+        run_cornice_unit_migrations(pool).await.unwrap();
     }
 
     #[tokio::test]
@@ -1447,5 +1524,69 @@ mod tests {
         assert_eq!(unit_value("Unknown"), None);
         assert_eq!(unit_value("??"), None);
         assert_eq!(unit_value(""), None);
+    }
+
+    #[tokio::test]
+    async fn cornice_unit_migration_splits_renames_and_drops() {
+        let pool = fresh_pool().await;
+        sqlx::query(
+            "CREATE TABLE cornice_rates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, series TEXT NOT NULL, model TEXT NOT NULL,
+                unit_text TEXT NOT NULL, unit_value REAL, is_confidential INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL, UNIQUE (series, model))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE cornice_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, log_date TEXT NOT NULL,
+                week_start TEXT NOT NULL, series TEXT NOT NULL, model TEXT NOT NULL, lengths INTEGER NOT NULL,
+                unit_text TEXT NOT NULL DEFAULT '', unit_value REAL, total_units REAL NOT NULL DEFAULT 0,
+                is_custom INTEGER NOT NULL DEFAULT 0, needs_admin_review INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO cornice_rates (series, model, unit_text, unit_value, is_confidential, updated_at)
+             VALUES ('S','491','1.2 or 2',1.2,1,'2026-01-01T00:00:00'),
+                    ('S','722','??',NULL,1,'2026-01-01T00:00:00'),
+                    ('S','404','1.5',1.5,1,'2026-01-01T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_cornice_unit_migrations(&pool).await.unwrap();
+        run_cornice_unit_migrations(&pool).await.unwrap();
+
+        assert!(column_exists(&pool, "cornice_rates", "unit").await);
+        assert!(!column_exists(&pool, "cornice_rates", "unit_text").await);
+        assert!(!column_exists(&pool, "cornice_rates", "unit_value").await);
+        assert!(!column_exists(&pool, "cornice_rates", "is_confidential").await);
+        assert!(column_exists(&pool, "cornice_logs", "unit").await);
+        assert!(!column_exists(&pool, "cornice_logs", "unit_text").await);
+
+        let models: Vec<String> =
+            sqlx::query_scalar("SELECT model FROM cornice_rates WHERE series='S' ORDER BY model")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(models.contains(&"491 (ambg 1)".to_string()));
+        assert!(models.contains(&"491 (ambg 2)".to_string()));
+        assert!(!models.contains(&"491".to_string()));
+
+        let u722: String = sqlx::query_scalar("SELECT unit FROM cornice_rates WHERE model='722'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(u722, "Unknown");
+        let u404: String = sqlx::query_scalar("SELECT unit FROM cornice_rates WHERE model='404'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(u404, "1.5");
     }
 }
