@@ -1428,7 +1428,8 @@ async function renderStaffClock(message = "") {
     `,
   );
   app.querySelector("[data-clock]").addEventListener("click", async (event) => {
-    setBusy(event.currentTarget);
+    const button = event.currentTarget;
+    setBusy(button);
     try {
       const warning =
         nextAction === "clock_in" && status.missed_yesterday_clock_out
@@ -1449,12 +1450,12 @@ async function renderStaffClock(message = "") {
       renderStaffClock(`${formatAction(result.action)} recorded at ${result.timestamp.slice(11)}`);
     } catch (error) {
       if (String(error.message || error) === "Cancelled.") {
-        event.currentTarget.disabled = false;
+        setBusy(button, false);
       } else {
         renderStaffClock(String(error.message || error));
       }
     } finally {
-      setBusy(event.currentTarget, false);
+      setBusy(button, false);
     }
   });
 }
