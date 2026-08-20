@@ -1485,7 +1485,7 @@ function bindCorniceModelSearch() {
         if (!box) return;
         box.innerHTML = (resp.matches || []).length
           ? `<label class="search-match-label">${resp.matches.length} match(es)<select data-rate-match><option value="">Pick a rate...</option>${resp.matches
-              .map((match, index) => `<option value="${index}">${escapeHtml(match.series ? `${match.series} · ` : "")}${escapeHtml(match.model)} · ${escapeHtml(match.unit_text || "Custom")}</option>`)
+              .map((match, index) => `<option value="${index}">${escapeHtml(match.series ? `${match.series} · ` : "")}${escapeHtml(match.model)} · ${escapeHtml(match.unit || "Custom")}</option>`)
               .join("")}</select></label>`
           : "No match found — will be logged as unknown/custom.";
         box.querySelector("[data-rate-match]")?.addEventListener("change", (event) => {
@@ -1494,7 +1494,7 @@ function bindCorniceModelSearch() {
           if (!match || !modelInput) return;
           modelInput.value = match.model;
           modelInput.dispatchEvent(new Event("change", { bubbles: true }));
-          box.insertAdjacentHTML("beforeend", `<div class="message">${escapeHtml(match.unit_text || "Custom")} selected</div>`);
+          box.insertAdjacentHTML("beforeend", `<div class="message">${escapeHtml(match.unit || "Custom")} selected</div>`);
         });
         box.style.display = "block";
       } catch {
@@ -1564,7 +1564,7 @@ async function renderStaffCornice() {
     app.querySelector("#staff-cornice-models").innerHTML = (resp.matches || [])
       .map(
         (match) =>
-          `<option value="${escapeHtml(match.model)}">${escapeHtml(match.series ? `${match.series} ` : "")}${escapeHtml(match.model)} (${match.unit_text})</option>`,
+          `<option value="${escapeHtml(match.model)}">${escapeHtml(match.series ? `${match.series} ` : "")}${escapeHtml(match.model)} (${match.unit})</option>`,
       )
       .join("");
   } catch {
@@ -1634,11 +1634,11 @@ async function renderStaffCornice() {
               cellHtml: (log, col) => corniceLogCellHtml(log, col.key),
             },
             {
-              key: "unit_text",
+              key: "unit",
               label: "Unit",
               type: "text",
               editable: false,
-              cellHtml: (log) => escapeHtml(log.unit_text || "Custom"),
+              cellHtml: (log) => escapeHtml(log.unit || "Custom"),
             },
             {
               key: "total_units",
@@ -1663,7 +1663,7 @@ async function renderStaffCornice() {
                 series: "",
                 model: "",
                 lengths: 0,
-                unit_text: "",
+                unit: "",
                 total_units: 0,
               });
               mountedDays[today]?.render();
@@ -2108,17 +2108,31 @@ function parsePrevValues(log) {
   }
 }
 
+// Numeric rate from a unit string (mirror of db::unit_value): Unknown→0, a/b→fraction, else first number.
+function unitValue(unit) {
+  const t = String(unit || "").trim();
+  if (!t || t.toLowerCase() === "unknown") return 0;
+  if (t.includes("/")) {
+    const [a, b] = t.split("/");
+    const num = parseFloat(a);
+    const den = parseFloat(b);
+    if (!Number.isNaN(num) && !Number.isNaN(den) && den !== 0) return num / den;
+  }
+  const n = parseFloat(t);
+  return Number.isNaN(n) ? 0 : n;
+}
+
 // Raw-HTML cell for cornice log Model/Lengths cells (pending old→new, ✎ cue, staged delete).
 // Returns null → caller falls back to the plain escaped value.
 function corniceLogCellHtml(log, key) {
   const rateMatch = state.corniceRateMatches.find(
     (rate) => rate.model.toLowerCase() === String(log.model || "").trim().toLowerCase(),
   );
-  if (key === "unit_text" && !log.unit_text && rateMatch) {
-    return escapeHtml(rateMatch.unit_text || "Custom");
+  if (key === "unit" && !log.unit && rateMatch) {
+    return escapeHtml(rateMatch.unit || "Custom");
   }
   if (key === "total_units" && rateMatch && log.lengths != null) {
-    return (Math.round(Number(rateMatch.unit_value || 0) * Number(log.lengths) * 100) / 100).toFixed(2);
+    return (Math.round(unitValue(rateMatch.unit) * Number(log.lengths) * 100) / 100).toFixed(2);
   }
   const prev = parsePrevValues(log);
   if (prev && prev.deleted) {
