@@ -1219,6 +1219,50 @@ fn clean_series(value: String) -> String {
         .replace('\u{201d}', "")
 }
 
+pub fn normalize_unit(unit: &str) -> String {
+    let t = unit.trim();
+    if t.is_empty() || t == "??" {
+        "Unknown".to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+pub fn expand_ambiguous(model: &str, unit: &str) -> Vec<(String, String)> {
+    let parts: Vec<String> = unit
+        .split(" or ")
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.len() <= 1 {
+        vec![(model.to_string(), normalize_unit(unit))]
+    } else {
+        parts
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (format!("{} (ambg {})", model, i + 1), normalize_unit(p)))
+            .collect()
+    }
+}
+
+pub fn unit_value(unit: &str) -> Option<f64> {
+    let t = unit.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("unknown") {
+        return None;
+    }
+    if let Some((a, b)) = t.split_once('/') {
+        if let (Ok(num), Ok(den)) = (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
+            if den != 0.0 {
+                return Some(num / den);
+            }
+        }
+    }
+    if let Ok(n) = t.parse::<f64>() {
+        return Some(n);
+    }
+    first_number(t)
+}
+
 fn first_number(value: &str) -> Option<f64> {
     let mut started = false;
     let mut number = String::new();
@@ -1359,5 +1403,49 @@ mod tests {
         assert_eq!(stock, 5);
         assert_eq!(reserved, 2);
         assert_eq!(location, "Aisle 1");
+    }
+
+    #[test]
+    fn normalize_unit_converts_question_marks() {
+        assert_eq!(normalize_unit("??"), "Unknown");
+        assert_eq!(normalize_unit("  ??  "), "Unknown");
+        assert_eq!(normalize_unit(""), "Unknown");
+        assert_eq!(normalize_unit("1.5"), "1.5");
+    }
+
+    #[test]
+    fn expand_ambiguous_splits_or_units() {
+        assert_eq!(
+            expand_ambiguous("491", "1.2 or 2"),
+            vec![
+                ("491 (ambg 1)".to_string(), "1.2".to_string()),
+                ("491 (ambg 2)".to_string(), "2".to_string()),
+            ]
+        );
+        assert_eq!(
+            expand_ambiguous("404", "1.5"),
+            vec![("404".to_string(), "1.5".to_string())]
+        );
+        assert_eq!(
+            expand_ambiguous("722", "??"),
+            vec![("722".to_string(), "Unknown".to_string())]
+        );
+        assert_eq!(
+            expand_ambiguous("909", "2 or 15/6"),
+            vec![
+                ("909 (ambg 1)".to_string(), "2".to_string()),
+                ("909 (ambg 2)".to_string(), "15/6".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn unit_value_parses_numbers_fractions_and_unknown() {
+        assert_eq!(unit_value("1.25"), Some(1.25));
+        assert_eq!(unit_value("2"), Some(2.0));
+        assert_eq!(unit_value("15/6"), Some(2.5));
+        assert_eq!(unit_value("Unknown"), None);
+        assert_eq!(unit_value("??"), None);
+        assert_eq!(unit_value(""), None);
     }
 }
