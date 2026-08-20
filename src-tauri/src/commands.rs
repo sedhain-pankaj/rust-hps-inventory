@@ -68,9 +68,7 @@ const CORNICE_RATE_COLUMNS: &[AdminColumn] = &[
     readonly_col("id", "ID", AdminColumnKind::Integer),
     col("series", "Series", AdminColumnKind::Text),
     col("model", "Model", AdminColumnKind::Text),
-    col("unit_text", "Unit Text", AdminColumnKind::Text),
-    col("unit_value", "Unit Value", AdminColumnKind::Real),
-    col("is_confidential", "Confidential", AdminColumnKind::Bool),
+    col("unit", "Unit", AdminColumnKind::Text),
     col("updated_at", "Updated", AdminColumnKind::Text),
 ];
 const STOCK_COLUMNS: &[AdminColumn] = &[
@@ -102,7 +100,7 @@ const CORNICE_LOG_COLUMNS: &[AdminColumn] = &[
     col("series", "Series", AdminColumnKind::Text),
     col("model", "Model", AdminColumnKind::Text),
     col("lengths", "Lengths", AdminColumnKind::Integer),
-    col("unit_text", "Unit Text", AdminColumnKind::Text),
+    col("unit", "Unit", AdminColumnKind::Text),
     col("unit_value", "Unit Value", AdminColumnKind::Real),
     col("total_units", "Total Units", AdminColumnKind::Real),
     col("is_custom", "Custom", AdminColumnKind::Bool),
@@ -970,7 +968,7 @@ pub async fn save_stock_item(
 pub async fn list_cornice_rates(state: State<'_, AppState>) -> CommandResult<Vec<CorniceRate>> {
     let rows = sqlx::query(
         r#"
-        SELECT id, series, model, unit_text, unit_value, is_confidential
+        SELECT id, series, model, unit
         FROM cornice_rates
         ORDER BY series COLLATE NOCASE, model COLLATE NOCASE
         "#,
@@ -995,16 +993,13 @@ pub async fn save_cornice_rate(
         sqlx::query(
             r#"
             UPDATE cornice_rates
-            SET series = ?, model = ?, unit_text = ?, unit_value = ?,
-                is_confidential = ?, updated_at = ?
+            SET series = ?, model = ?, unit = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
         .bind(input.series.trim())
         .bind(input.model.trim())
-        .bind(input.unit_text.trim())
-        .bind(input.unit_value)
-        .bind(input.is_confidential as i64)
+        .bind(input.unit.trim())
         .bind(&now)
         .bind(id)
         .execute(&state.db)
@@ -1015,15 +1010,13 @@ pub async fn save_cornice_rate(
         let result = sqlx::query(
             r#"
             INSERT INTO cornice_rates
-                (series, model, unit_text, unit_value, is_confidential, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (series, model, unit, updated_at)
+            VALUES (?, ?, ?, ?)
             "#,
         )
         .bind(input.series.trim())
         .bind(input.model.trim())
-        .bind(input.unit_text.trim())
-        .bind(input.unit_value)
-        .bind(input.is_confidential as i64)
+        .bind(input.unit.trim())
         .bind(&now)
         .execute(&state.db)
         .await
@@ -1463,8 +1456,8 @@ pub async fn add_cornice_log(
         .await
         .map_err(to_string)?;
 
-    let (series, unit_text, unit_value, is_custom) = match rate {
-        Some(rate) => (rate.series, rate.unit_text, rate.unit_value, false),
+    let (series, unit, unit_value, is_custom) = match rate {
+        Some(rate) => (rate.series, rate.unit.clone(), crate::db::unit_value(&rate.unit), false),
         None => (input.series.trim().to_string(), String::new(), None, true),
     };
     let total_units = (unit_value.unwrap_or(0.0) * input.lengths as f64 * 100.0).round() / 100.0;
@@ -1473,7 +1466,7 @@ pub async fn add_cornice_log(
     let result = sqlx::query(
         r#"
         INSERT INTO cornice_logs
-            (employee_id, log_date, week_start, series, model, lengths, unit_text,
+            (employee_id, log_date, week_start, series, model, lengths, unit,
              unit_value, total_units, is_custom, needs_admin_review, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
@@ -1484,7 +1477,7 @@ pub async fn add_cornice_log(
     .bind(series)
     .bind(input.model.trim())
     .bind(input.lengths)
-    .bind(unit_text)
+    .bind(unit)
     .bind(unit_value)
     .bind(total_units)
     .bind(is_custom as i64)
@@ -1568,8 +1561,8 @@ pub async fn update_cornice_log(
     let rate = find_rate_for_model(&state.db, input.model.trim())
         .await
         .map_err(to_string)?;
-    let (series, unit_text, unit_value, is_custom) = match rate {
-        Some(rate) => (rate.series, rate.unit_text, rate.unit_value, false),
+    let (series, unit, unit_value, is_custom) = match rate {
+        Some(rate) => (rate.series, rate.unit.clone(), crate::db::unit_value(&rate.unit), false),
         None => (input.series.trim().to_string(), String::new(), None, true),
     };
     let total_units = (unit_value.unwrap_or(0.0) * input.lengths as f64 * 100.0).round() / 100.0;
@@ -1598,7 +1591,7 @@ pub async fn update_cornice_log(
     sqlx::query(
         r#"
         UPDATE cornice_logs
-        SET series = ?, model = ?, lengths = ?, unit_text = ?, unit_value = ?, total_units = ?,
+        SET series = ?, model = ?, lengths = ?, unit = ?, unit_value = ?, total_units = ?,
             is_custom = ?, needs_admin_review = ?, prev_values = ?, amended_at = ?, amended_by = ?
         WHERE id = ?
         "#,
@@ -1606,7 +1599,7 @@ pub async fn update_cornice_log(
     .bind(series)
     .bind(input.model.trim())
     .bind(input.lengths)
-    .bind(unit_text)
+    .bind(unit)
     .bind(unit_value)
     .bind(total_units)
     .bind(is_custom as i64)
@@ -2197,7 +2190,7 @@ pub async fn search_cornice_rates(
     // Get all rates and do fuzzy matching in Rust (Levenshtein-like scoring)
     let rows = sqlx::query(
         r#"
-        SELECT id, series, model, unit_text, unit_value
+        SELECT id, series, model, unit
         FROM cornice_rates
         ORDER BY model COLLATE NOCASE
         "#,
@@ -2235,8 +2228,7 @@ pub async fn search_cornice_rates(
                 id: row.get("id"),
                 series: row.get("series"),
                 model,
-                unit_text: row.get("unit_text"),
-                unit_value: row.get("unit_value"),
+                unit: row.get("unit"),
                 score,
             });
         }
@@ -2505,11 +2497,11 @@ pub async fn resolve_unknown_rate(
         sqlx::query(
             r#"
             UPDATE cornice_rates
-            SET unit_value = ?, is_confidential = 0, updated_at = ?
+            SET unit = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
-        .bind(input.unit_value)
+        .bind(format!("{:.2}", input.unit_value))
         .bind(&now)
         .bind(existing_id)
         .execute(&state.db)
@@ -2519,14 +2511,13 @@ pub async fn resolve_unknown_rate(
     } else {
         let result = sqlx::query(
             r#"
-            INSERT INTO cornice_rates (series, model, unit_text, unit_value, is_confidential, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?)
+            INSERT INTO cornice_rates (series, model, unit, updated_at)
+            VALUES (?, ?, ?, ?)
             "#,
         )
         .bind(&series)
         .bind(model)
-        .bind(format!("{:.2} units/m", input.unit_value))
-        .bind(input.unit_value)
+        .bind(format!("{:.2}", input.unit_value))
         .bind(&now)
         .execute(&state.db)
         .await
@@ -3087,7 +3078,7 @@ async fn stock_item_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<Stock
 
 async fn cornice_rate_by_id(db: &sqlx::SqlitePool, id: i64) -> CommandResult<CorniceRate> {
     let row = sqlx::query(
-        "SELECT id, series, model, unit_text, unit_value, is_confidential FROM cornice_rates WHERE id = ?",
+        "SELECT id, series, model, unit FROM cornice_rates WHERE id = ?",
     )
     .bind(id)
     .fetch_one(db)
@@ -3103,7 +3094,7 @@ async fn find_rate_for_model(
 ) -> Result<Option<CorniceRate>, sqlx::Error> {
     sqlx::query(
         r#"
-        SELECT id, series, model, unit_text, unit_value, is_confidential
+        SELECT id, series, model, unit
         FROM cornice_rates
         WHERE lower(model) = lower(?)
         LIMIT 1
@@ -3120,9 +3111,7 @@ fn cornice_rate_from_row(row: sqlx::sqlite::SqliteRow) -> CorniceRate {
         id: row.get("id"),
         series: row.get("series"),
         model: row.get("model"),
-        unit_text: row.get("unit_text"),
-        unit_value: row.get("unit_value"),
-        is_confidential: row.get::<i64, _>("is_confidential") != 0,
+        unit: row.get("unit"),
     }
 }
 
@@ -3364,7 +3353,7 @@ async fn cornice_log_from_row(
         series: row.get("series"),
         model: row.get("model"),
         lengths: row.get("lengths"),
-        unit_text: row.get("unit_text"),
+        unit: row.get("unit"),
         unit_value: row.get("unit_value"),
         total_units: row.get("total_units"),
         weekly_units,

@@ -106,9 +106,7 @@ pub struct CorniceRate {
     pub id: i64,
     pub series: String,
     pub model: String,
-    pub unit_text: String,
-    pub unit_value: Option<f64>,
-    pub is_confidential: bool,
+    pub unit: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,9 +114,7 @@ pub struct CorniceRateInput {
     pub id: Option<i64>,
     pub series: String,
     pub model: String,
-    pub unit_text: String,
-    pub unit_value: Option<f64>,
-    pub is_confidential: bool,
+    pub unit: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -184,7 +180,7 @@ pub struct CorniceLog {
     pub series: String,
     pub model: String,
     pub lengths: i64,
-    pub unit_text: String,
+    pub unit: String,
     pub unit_value: Option<f64>,
     pub total_units: f64,
     pub weekly_units: f64,
@@ -370,8 +366,7 @@ pub struct CorniceRateMatch {
     pub id: i64,
     pub series: String,
     pub model: String,
-    pub unit_text: String,
-    pub unit_value: Option<f64>,
+    pub unit: String,
     pub score: u32,
 }
 
