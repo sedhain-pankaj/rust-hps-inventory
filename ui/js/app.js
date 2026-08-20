@@ -1846,19 +1846,28 @@ async function renderStaffRates() {
   const seriesNames = Object.keys(groups).sort();
   const body = seriesNames.length
     ? `<div class="rate-series-layout">${seriesNames
-      .sort()
-      .map(
-        (series) => `
-      <section class="rate-group"><h3>${escapeHtml(series)}</h3>
-      ${table(["Model", "Unit"], groups[series].map((rate) => ({ cells: [rate.model, rate.unit_text] })))}</section>`,
-      )
-      .join("")}</div>`
+        .map(
+          (series) => `
+        <section class="rate-group">
+          <div class="rate-group-head"><h3>${escapeHtml(series)}</h3></div>
+          <div data-rate-group="${escapeHtml(series)}"></div>
+        </section>`,
+        )
+        .join("")}</div>`
     : `<div class="empty">No rates yet.</div>`;
   setPanel(
     "Cornice Rates (Read-Only)",
     `<button class="ghost" data-refresh>Refresh</button>`,
     body,
   );
+  seriesNames.forEach((series) => {
+    mountRatesCardGrid(app.querySelector(`[data-rate-group="${CSS.escape(series)}"]`), null, {
+      rows: groups[series] || [],
+      series,
+      tableId: `series-${CSS.escape(series)}`,
+      editable: false,
+    });
+  });
   app.querySelector("[data-refresh]").addEventListener("click", renderStaffRates);
 }
 
