@@ -70,6 +70,18 @@ def first_number(value: str):
         return None
 
 
+def normalize_unit(unit: str) -> str:
+    t = unit.strip()
+    return 'Unknown' if (not t or t == '??') else t
+
+
+def expand_ambiguous(model: str, unit: str):
+    parts = [p.strip() for p in unit.split(' or ') if p.strip()]
+    if len(parts) <= 1:
+        return [(model, normalize_unit(unit))]
+    return [(f"{model} (ambg {i + 1})", normalize_unit(p)) for i, p in enumerate(parts)]
+
+
 def now_string():
     return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -89,15 +101,15 @@ def seed_cornice_rates(conn):
         while index + 1 < len(headers):
             series = clean_series(headers[index] if index < len(headers) else '')
             model = clean_cell(row[index]) if index < len(row) else ''
-            unit_text = row[index+1] if index+1 < len(row) else ''
+            unit = row[index+1] if index+1 < len(row) else ''
             if series and model:
-                unit_value = first_number(unit_text)
-                cur.execute(
-                    "INSERT OR IGNORE INTO cornice_rates (series, model, unit_text, unit_value, is_confidential, updated_at) VALUES (?, ?, ?, ?, 1, ?)",
-                    (series, model, unit_text, unit_value, now),
-                )
-                if cur.rowcount:
-                    inserted += 1
+                for m, u in expand_ambiguous(model, unit):
+                    cur.execute(
+                        "INSERT OR IGNORE INTO cornice_rates (series, model, unit, updated_at) VALUES (?, ?, ?, ?)",
+                        (series, m, u, now),
+                    )
+                    if cur.rowcount:
+                        inserted += 1
             index += 2
     conn.commit()
     return inserted

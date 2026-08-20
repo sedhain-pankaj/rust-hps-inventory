@@ -36,9 +36,7 @@ CREATE TABLE IF NOT EXISTS cornice_rates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     series TEXT NOT NULL,
     model TEXT NOT NULL,
-    unit_text TEXT NOT NULL,
-    unit_value REAL,
-    is_confidential INTEGER NOT NULL DEFAULT 1,
+    unit TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (series, model)
 );
@@ -76,7 +74,7 @@ CREATE TABLE IF NOT EXISTS cornice_logs (
     series TEXT NOT NULL,
     model TEXT NOT NULL,
     lengths INTEGER NOT NULL,
-    unit_text TEXT NOT NULL DEFAULT '',
+    unit TEXT NOT NULL DEFAULT '',
     unit_value REAL,
     total_units REAL NOT NULL DEFAULT 0,
     is_custom INTEGER NOT NULL DEFAULT 0,
