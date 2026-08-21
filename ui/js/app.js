@@ -483,7 +483,7 @@ async function renderEnrollPanel() {
       </div>
       <div id="enroll-scan-status" class="scan-status" style="display:none"></div>
       ${table(
-        ["Name", "ID", "Admin", "Password", "Fingerprint"],
+        ["Name", "ID", "Admin", "Password", "Fingerprint", "Template Finger", "Last Updated"],
         employees.map((employee) => ({
           review: !employee.has_password || !employee.has_fingerprint,
           cells: [
@@ -492,6 +492,8 @@ async function renderEnrollPanel() {
             employee.is_admin ? "Yes" : "No",
             employee.has_password ? "Set" : "No",
             employee.has_fingerprint ? "Enrolled" : "No",
+            employee.finger,
+            formatTimestamp(employee.fingerprint_updated_at),
           ],
         })),
       )}
@@ -2165,6 +2167,20 @@ function fingerOptions(selected = "right-index") {
       `,
     )
     .join("");
+}
+
+function formatTimestamp(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString("en-AU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 function formatFingerprintLine(line) {

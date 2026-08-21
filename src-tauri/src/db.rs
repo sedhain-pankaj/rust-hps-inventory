@@ -1139,8 +1139,10 @@ pub async fn employee_by_id(
     let row = sqlx::query(
         r#"
         SELECT e.*,
-               EXISTS(SELECT 1 FROM fingerprint_templates f WHERE f.employee_id = e.id) AS has_fingerprint
+               EXISTS(SELECT 1 FROM fingerprint_templates f WHERE f.employee_id = e.id) AS has_fingerprint,
+               f.updated_at AS fingerprint_updated_at
         FROM employees e
+        LEFT JOIN fingerprint_templates f ON f.employee_id = e.id
         WHERE e.id = ?
         "#,
     )
@@ -1161,8 +1163,10 @@ pub async fn list_employees(
     let rows = sqlx::query(
         r#"
         SELECT e.*,
-               EXISTS(SELECT 1 FROM fingerprint_templates f WHERE f.employee_id = e.id) AS has_fingerprint
+               EXISTS(SELECT 1 FROM fingerprint_templates f WHERE f.employee_id = e.id) AS has_fingerprint,
+               f.updated_at AS fingerprint_updated_at
         FROM employees e
+        LEFT JOIN fingerprint_templates f ON f.employee_id = e.id
         WHERE (? = 1 OR e.active = 1)
         ORDER BY e.name COLLATE NOCASE
         "#,
@@ -1192,6 +1196,7 @@ async fn employee_from_row(
         is_admin: row.get::<i64, _>("is_admin") != 0,
         has_password: row.get::<Option<String>, _>("password_hash").is_some(),
         has_fingerprint: row.get::<i64, _>("has_fingerprint") != 0,
+        fingerprint_updated_at: row.get::<Option<String>, _>("fingerprint_updated_at"),
         staff_category: row.try_get("staff_category").unwrap_or_else(|_| "cornice_hand".to_string()),
     })
 }

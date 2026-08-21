@@ -17,6 +17,7 @@ pub struct Employee {
     pub is_admin: bool,
     pub has_password: bool,
     pub has_fingerprint: bool,
+    pub fingerprint_updated_at: Option<String>,
     pub permissions: Vec<String>,
     pub staff_category: String,
 }
