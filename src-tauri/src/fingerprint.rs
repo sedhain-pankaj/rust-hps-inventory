@@ -137,17 +137,9 @@ pub async fn identify_employee(
         match result {
             Ok(lines) => {
                 for line in lines {
-                    if let Some(raw_id) = line.strip_prefix("MATCH|") {
+                    if let Some(employee_id) = line.strip_prefix("MATCH|") {
                         clear_template_cache(&storage);
-                        // Strip the -{index} suffix added by multi-template enrollment
-                        let trimmed = raw_id.trim();
-                        let employee_id = trimmed
-                            .rsplit_once('-')
-                            .filter(|(_, suffix)| suffix.chars().all(|c| c.is_ascii_digit()))
-                            .map(|(base, _)| base)
-                            .unwrap_or(trimmed)
-                            .to_string();
-                        return Ok(employee_id);
+                        return Ok(employee_id.trim().to_string());
                     }
                     if let Some(retry_reason) = line.strip_prefix("RETRY|") {
                         last_retry = Some(retry_reason.trim().to_string());
@@ -205,14 +197,11 @@ pub async fn enroll_employee(
     let storage = paths.fingerprint_dir.clone();
     fs::create_dir_all(&storage).context("Could not create fingerprint storage")?;
 
-    const TEMPLATE_COUNT: usize = 3;
-
     let args: Vec<String> = vec![
-        "enroll-multi".to_string(),
+        "enroll".to_string(),
         path_string(&storage),
         employee_id.to_string(),
         finger.to_string(),
-        TEMPLATE_COUNT.to_string(),
     ];
     // Run enroll with one retry for "resource busy" — after a failed identify,
     // the CS9711 USB driver may still be releasing the interface.
@@ -257,41 +246,32 @@ pub async fn enroll_employee(
         _ => lines_raw?,
     };
 
-    // Read and store each template file produced by the helper
-    let mut stored_count = 0usize;
-    for index in 1..=TEMPLATE_COUNT {
-        let template_path = storage.join(format!("{employee_id}-{index}.fpdata"));
-        let Ok(template) = fs::read(&template_path) else {
-            continue;
-        };
-
-        sqlx::query(
-            r#"
-            INSERT INTO fingerprint_templates (employee_id, finger, template_index, template, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(employee_id, finger, template_index) DO UPDATE SET
-                template = excluded.template,
-                updated_at = excluded.updated_at
-            "#,
+    let template_path = storage.join(format!("{employee_id}.fpdata"));
+    let template = fs::read(&template_path).with_context(|| {
+        format!(
+            "Enrollment completed, but the fingerprint template was not readable at {}",
+            template_path.display()
         )
-        .bind(employee_id)
-        .bind(finger)
-        .bind(index as i32)
-        .bind(template)
-        .bind(now_string())
-        .execute(db)
-        .await?;
+    })?;
 
-        let _ = fs::remove_file(&template_path);
-        stored_count += 1;
-    }
+    sqlx::query(
+        r#"
+        INSERT INTO fingerprint_templates (employee_id, finger, template, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(employee_id) DO UPDATE SET
+            finger = excluded.finger,
+            template = excluded.template,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(employee_id)
+    .bind(finger)
+    .bind(template)
+    .bind(now_string())
+    .execute(db)
+    .await?;
 
-    if stored_count == 0 {
-        return Err(anyhow::anyhow!(
-            "Enrollment completed, but no fingerprint templates were found in {}",
-            storage.display()
-        ));
-    }
+    let _ = fs::remove_file(template_path);
 
     Ok(lines)
 }
@@ -299,19 +279,14 @@ pub async fn enroll_employee(
 async fn export_templates(db: &sqlx::SqlitePool, paths: &AppPaths) -> Result<()> {
     fs::create_dir_all(&paths.fingerprint_dir).context("Could not create fingerprint storage")?;
     clear_template_cache(&paths.fingerprint_dir);
-    let rows = sqlx::query(
-        "SELECT employee_id, template_index, template FROM fingerprint_templates",
-    )
-    .fetch_all(db)
-    .await?;
+    let rows = sqlx::query("SELECT employee_id, template FROM fingerprint_templates")
+        .fetch_all(db)
+        .await?;
 
     for row in rows {
         let employee_id: String = row.get("employee_id");
-        let template_index: i32 = row.get("template_index");
         let template: Vec<u8> = row.get("template");
-        let path = paths
-            .fingerprint_dir
-            .join(format!("{employee_id}-{template_index}.fpdata"));
+        let path = paths.fingerprint_dir.join(format!("{employee_id}.fpdata"));
         fs::write(&path, template)?;
         set_private_permissions(&path);
     }
@@ -511,9 +486,12 @@ fn extract_bundled_helper(paths: &AppPaths) -> Result<PathBuf> {
 }
 
 fn write_if_different(path: &Path, bytes: &[u8]) -> Result<()> {
-    let needs_write = fs::metadata(path)
-        .map(|metadata| metadata.len() != bytes.len() as u64)
-        .unwrap_or(true);
+    // Compare full content (not just size): a rebuilt lib can be the same length
+    // with different bytes, and a size-only check would leave the stale file in place.
+    let needs_write = match fs::read(path) {
+        Ok(existing) => existing.as_slice() != bytes,
+        Err(_) => true,
+    };
     if needs_write {
         fs::write(path, bytes)?;
     }

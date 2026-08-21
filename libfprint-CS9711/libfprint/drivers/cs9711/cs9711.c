@@ -461,7 +461,9 @@ fpi_device_cs9711_class_init (FpDeviceCs9711Class *klass)
   img_class->deactivate = dev_deactivate;
   img_class->change_state = dev_change_state;
 
-  img_class->score_threshold = 24;
+  //TODO: Makes very marginal improvement, stick with default in case
+  //      it changes with a better implementation in the future
+  // img_class->bz3_threshold = 24;
 
   img_class->img_width = CS9711_WIDTH;
   img_class->img_height = CS9711_HEIGHT;

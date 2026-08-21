@@ -179,8 +179,10 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
     .execute(db)
     .await?;
 
-    // Migrate fingerprint_templates from single-template (employee_id PK) to
-    // multi-template (composite unique key with template_index).
+    // Migrate fingerprint_templates from the legacy multi-template schema
+    // (composite unique key with template_index) back to a single template per
+    // employee (employee_id primary key). Keeps each employee's designated
+    // finger at the lowest template_index.
     let has_template_index: bool = sqlx::query_scalar(
         r#"
         SELECT COUNT(*) > 0 FROM pragma_table_info('fingerprint_templates')
@@ -191,17 +193,14 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
     .await
     .unwrap_or(false);
 
-    if !has_template_index {
+    if has_template_index {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS fingerprint_templates_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id TEXT NOT NULL,
+                employee_id TEXT PRIMARY KEY,
                 finger TEXT NOT NULL,
-                template_index INTEGER NOT NULL DEFAULT 1,
                 template BLOB NOT NULL,
                 updated_at TEXT NOT NULL,
-                UNIQUE (employee_id, finger, template_index),
                 FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
             );
             "#,
@@ -209,42 +208,46 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
         .execute(db)
         .await?;
 
-        // Copy existing rows (old schema: employee_id PK, no template_index)
-        let old_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fingerprint_templates")
+        // Keep the designated-finger template at the lowest template_index per employee
+        let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fingerprint_templates")
             .fetch_one(db)
             .await
             .unwrap_or(0);
-        if old_count > 0 {
+        if row_count > 0 {
             sqlx::query(
                 r#"
                 INSERT OR IGNORE INTO fingerprint_templates_new
-                    (employee_id, finger, template_index, template, updated_at)
-                SELECT employee_id, finger, 1, template, updated_at
-                FROM fingerprint_templates
+                    (employee_id, finger, template, updated_at)
+                SELECT t.employee_id, t.finger, t.template, t.updated_at
+                FROM fingerprint_templates t
+                JOIN employees e ON e.id = t.employee_id
+                WHERE t.finger = e.finger
+                  AND t.template_index = (
+                      SELECT MIN(t2.template_index)
+                      FROM fingerprint_templates t2
+                      WHERE t2.employee_id = t.employee_id AND t2.finger = e.finger
+                  )
                 "#,
             )
             .execute(db)
             .await?;
         }
 
-        sqlx::query("DROP TABLE IF EXISTS fingerprint_templates")
+        sqlx::query("DROP TABLE fingerprint_templates")
             .execute(db)
             .await?;
         sqlx::query("ALTER TABLE fingerprint_templates_new RENAME TO fingerprint_templates")
             .execute(db)
             .await?;
     } else {
-        // Fresh install or already migrated — ensure table exists with new schema
+        // Fresh install or already single-template — ensure the table exists
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS fingerprint_templates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id TEXT NOT NULL,
+                employee_id TEXT PRIMARY KEY,
                 finger TEXT NOT NULL,
-                template_index INTEGER NOT NULL DEFAULT 1,
                 template BLOB NOT NULL,
                 updated_at TEXT NOT NULL,
-                UNIQUE (employee_id, finger, template_index),
                 FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
             );
             "#,
@@ -1075,9 +1078,10 @@ async fn import_legacy_fingerprints_if_present(db: &SqlitePool, paths: &AppPaths
         };
         sqlx::query(
             r#"
-            INSERT INTO fingerprint_templates (employee_id, finger, template_index, template, updated_at)
-            VALUES (?, ?, 1, ?, ?)
-            ON CONFLICT(employee_id, finger, template_index) DO UPDATE SET
+            INSERT INTO fingerprint_templates (employee_id, finger, template, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(employee_id) DO UPDATE SET
+                finger = excluded.finger,
                 template = excluded.template,
                 updated_at = excluded.updated_at
             "#,
@@ -1588,5 +1592,66 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(u404, "1.5");
+    }
+
+    #[tokio::test]
+    async fn fingerprint_migration_converts_multi_template_to_single() {
+        let pool = fresh_pool().await;
+        // Establish the base schema (single-template fingerprint_templates + employees).
+        migrate(&pool).await.unwrap();
+
+        // Simulate the legacy multi-template state: one employee with 3 templates on the
+        // designated finger plus 1 on a different finger.
+        sqlx::query(
+            "INSERT INTO employees (id, name, finger, active, is_admin, password_hash, created_at, updated_at)
+             VALUES ('E1','One','right-index',1,0,'x','2026-01-01T00:00:00','2026-01-01T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DROP TABLE fingerprint_templates")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE fingerprint_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id TEXT NOT NULL, finger TEXT NOT NULL,
+                template_index INTEGER NOT NULL DEFAULT 1, template BLOB NOT NULL, updated_at TEXT NOT NULL,
+                UNIQUE (employee_id, finger, template_index),
+                FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO fingerprint_templates (employee_id, finger, template_index, template, updated_at)
+             VALUES ('E1','right-index',1,X'01','2026-01-01T00:00:00'),
+                    ('E1','right-index',2,X'02','2026-01-01T00:00:00'),
+                    ('E1','right-index',3,X'03','2026-01-01T00:00:00'),
+                    ('E1','left-index',1,X'04','2026-01-01T00:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Re-run migrate(): the fingerprint migration collapses to one row per employee,
+        // keeping the designated finger at the lowest template_index. Idempotent on re-run.
+        migrate(&pool).await.unwrap();
+        migrate(&pool).await.unwrap();
+
+        assert!(!column_exists(&pool, "fingerprint_templates", "template_index").await);
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT employee_id, finger FROM fingerprint_templates")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, vec![("E1".to_string(), "right-index".to_string())]);
+        let tpl: Vec<u8> = sqlx::query_scalar(
+            "SELECT template FROM fingerprint_templates WHERE employee_id='E1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tpl, vec![0x01]);
     }
 }

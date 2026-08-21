@@ -571,12 +571,6 @@ async function renderEnrollPanel() {
                 scanStatus.className = "scan-status info";
                 scanStatus.textContent = "Scanner ready — place your finger now";
               }
-            } else if (raw.startsWith("TEMPLATE|")) {
-              const [, num, total] = raw.split("|");
-              if (scanStatus) {
-                scanStatus.className = "scan-status info";
-                scanStatus.textContent = `Enrolling template ${num} of ${total} — place your finger`;
-              }
             }
           }
         }
@@ -2182,10 +2176,6 @@ function formatFingerprintLine(line) {
   }
   if (line.startsWith("ENROLL_STAGES|")) {
     return `Reader requires ${line.split("|")[1]} enrollment stages`;
-  }
-  if (line.startsWith("TEMPLATE|")) {
-    const [, num, total] = line.split("|");
-    return `Enrolling template ${num} of ${total}`;
   }
   if (line.startsWith("DEVICE|")) {
     const [, name, driver, id] = line.split("|");

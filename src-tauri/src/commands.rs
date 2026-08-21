@@ -60,7 +60,6 @@ const EMPLOYEE_PERMISSION_COLUMNS: &[AdminColumn] = &[
 const FINGERPRINT_COLUMNS: &[AdminColumn] = &[
     col("employee_id", "Employee ID", AdminColumnKind::Text),
     col("finger", "Finger", AdminColumnKind::Text),
-    col("template_index", "Template #", AdminColumnKind::Integer),
     protected_col("template", "Template Blob", AdminColumnKind::Blob),
     col("updated_at", "Updated", AdminColumnKind::Text),
 ];
