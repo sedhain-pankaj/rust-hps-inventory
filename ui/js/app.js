@@ -276,7 +276,7 @@ function renderAdmin() {
   const tabs = [
     ["alerts", "Alerts"],
     ["employees", "Employees"],
-    ["enroll", "Enroll"],
+    ["enroll", "Fingerprint"],
     ["payroll", "Payroll"],
     ["dispatch", "Dispatch"],
     ["mould_inventory", "Mould Locations"],
@@ -285,6 +285,7 @@ function renderAdmin() {
     ["time", "Time Clock"],
     ["logs", "Daily Logs"],
     ["database", "Database"],
+    ["about", "About"],
   ];
   app.innerHTML = workspaceShell(
     "Admin",
@@ -321,6 +322,7 @@ async function renderAdminPanel() {
   if (state.adminView === "rates") return renderRatesPanel();
   if (state.adminView === "time") return renderTimePanel();
   if (state.adminView === "logs") return renderLogsPanel();
+  if (state.adminView === "about") return renderAboutPanel();
   return renderDatabasePanel();
 }
 
@@ -363,31 +365,41 @@ async function renderEmployeesPanel() {
     `<button class="ghost" data-new-employee>New</button>`,
     `
       <form class="form-grid" data-employee-form>
-        <label>Employee ID<input name="id" value="${escapeHtml(selected.id)}" /></label>
-        <label>Name<input name="name" value="${escapeHtml(selected.name)}" /></label>
-        <label>Finger<input name="finger" value="${escapeHtml(selected.finger)}" /></label>
-        <label>Password<input name="password" type="password" placeholder="Leave blank to keep current password" /></label>
-        <label class="check"><input type="checkbox" name="active" ${selected.active ? "checked" : ""} /> Active</label>
-        <label class="check"><input type="checkbox" name="is_admin" ${selected.is_admin ? "checked" : ""} /> Admin</label>
-        <label>Staff Role
-          <select name="staff_category">
-            ${['cornice_hand','storekeeper','non_cornice','driver','helper'].map(c =>
-              `<option value="${c}" ${(selected.staff_category || 'cornice_hand') === c ? 'selected' : ''}>${c.replace('_', ' ')}</option>`
-            ).join('')}
-          </select>
-        </label>
-        <div class="wide checkbox-row">
-          ${Object.entries(permissionLabels)
-            .map(
-              ([key, label]) => `
-                <label class="check">
-                  <input type="checkbox" name="permission" value="${key}"
-                    ${selected.permissions?.includes(key) ? "checked" : ""} />
-                  ${escapeHtml(label)}
-                </label>
-              `,
-            )
-            .join("")}
+        <div class="form-section">
+          <h3 class="form-section-title">Details</h3>
+          <label><span>Employee ID<span class="req">*</span></span><input name="id" required data-employee-id value="${escapeHtml(selected.id)}" /><span class="field-error" data-id-error></span></label>
+          <label><span>Name<span class="req">*</span></span><input name="name" required value="${escapeHtml(selected.name)}" /></label>
+          <label>Password<input name="password" type="password" placeholder="Leave blank to keep current password" /></label>
+        </div>
+        <div class="form-section">
+          <h3 class="form-section-title">Account</h3>
+          <div class="wide checkbox-row">
+            <label class="check"><input type="checkbox" name="active" ${selected.active ? "checked" : ""} /> Active</label>
+            <label class="check"><input type="checkbox" name="is_admin" ${selected.is_admin ? "checked" : ""} /> Admin</label>
+          </div>
+        </div>
+        <div class="form-section">
+          <h3 class="form-section-title">Role &amp; Permissions</h3>
+          <label>Staff Role
+            <select name="staff_category">
+              ${['cornice_hand','storekeeper','non_cornice','driver','helper'].map(c =>
+                `<option value="${c}" ${(selected.staff_category || 'cornice_hand') === c ? 'selected' : ''}>${c.replace('_', ' ')}</option>`
+              ).join('')}
+            </select>
+          </label>
+          <div class="wide checkbox-row">
+            ${Object.entries(permissionLabels)
+              .map(
+                ([key, label]) => `
+                  <label class="check">
+                    <input type="checkbox" name="permission" value="${key}"
+                      ${selected.permissions?.includes(key) ? "checked" : ""} />
+                    ${escapeHtml(label)}
+                  </label>
+                `,
+              )
+              .join("")}
+          </div>
         </div>
         <div class="wide panel-actions">
           <button class="primary" type="submit">Save Employee</button>
@@ -422,37 +434,63 @@ async function renderEmployeesPanel() {
       renderEmployeesPanel();
     });
   });
-  app.querySelector("[data-employee-form]").addEventListener("submit", async (event) => {
+  const employeeForm = app.querySelector("[data-employee-form");
+  const idInput = employeeForm.querySelector("[data-employee-id]");
+  const idError = employeeForm.querySelector("[data-id-error]");
+  const setIdError = (message) => {
+    idError.textContent = message;
+    idInput.focus();
+  };
+  idInput.addEventListener("input", () => {
+    idError.textContent = "";
+  });
+  employeeForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const permissions = form.getAll("permission");
-    state.selectedEmployee = await invoke("save_employee", {
-      input: {
-        id: form.get("id"),
-        name: form.get("name"),
-        finger: form.get("finger") || "right-index",
-        active: form.get("active") === "on",
-        is_admin: form.get("is_admin") === "on",
-        password: form.get("password"),
-        permissions,
-        staff_category: form.get("staff_category") || "cornice_hand",
-      },
-    });
+    const newId = String(form.get("id")).trim();
+    const originalId = selected.id.trim();
+    if (
+      newId !== originalId &&
+      employees.some((item) => item.id.trim().toLowerCase() === newId.toLowerCase())
+    ) {
+      setIdError("Employee ID already exists.");
+      return;
+    }
+    try {
+      state.selectedEmployee = await invoke("save_employee", {
+        input: {
+          id: form.get("id"),
+          name: form.get("name"),
+          finger: selected.finger || "right-index",
+          active: form.get("active") === "on",
+          is_admin: form.get("is_admin") === "on",
+          password: form.get("password"),
+          permissions,
+          staff_category: form.get("staff_category") || "cornice_hand",
+          expect_new: originalId === "",
+        },
+      });
+    } catch (error) {
+      setIdError(String(error.message || error));
+      return;
+    }
     renderEmployeesPanel();
   });
 }
 
 async function renderEnrollPanel() {
   const employees = await invoke("list_staff", { includeInactive: true });
-  const selected = state.selectedEmployee || employees[0] || emptyEmployee();
+  const selected = state.selectedEmployee || emptyEmployee();
   const log = state.enrollmentLog || [];
   setPanel(
     "Fingerprint Enrollment",
     `<button class="ghost" data-refresh>Refresh</button>`,
     `
       <form class="form-grid" data-enroll-form>
-        <label class="wide">Employee
+        <label class="wide"><span>Employee<span class="req">*</span></span>
           <select name="employee_id">
+            <option value="" disabled ${selected.id ? "" : "selected"}>Select an employee</option>
             ${employees
               .map(
                 (employee) => `
@@ -464,16 +502,16 @@ async function renderEnrollPanel() {
               .join("")}
           </select>
         </label>
-        <label>Finger
+        <label><span>Finger<span class="req">*</span></span>
           <select name="finger">
-            ${fingerOptions(selected.finger)}
+            <option value="" disabled selected>Select the finger</option>
+            ${fingerOptions("")}
           </select>
         </label>
         <div class="panel-actions">
           <button class="warning" type="submit">Enroll / Replace Fingerprint</button>
         </div>
       </form>
-      <div class="message">The template is saved to SQLite as a BLOB. Temporary helper files are cleared after enrollment and scans.</div>
       <div class="log-box" data-enrollment-log>
         ${
           log.length
@@ -504,6 +542,16 @@ async function renderEnrollPanel() {
     event.preventDefault();
     const button = event.currentTarget.querySelector("button[type='submit']");
     const form = new FormData(event.currentTarget);
+    const employeeId = form.get("employee_id");
+    const finger = form.get("finger");
+    if (!employeeId) {
+      alert("Select an employee to enroll.");
+      return;
+    }
+    if (!finger) {
+      alert("Select the finger to enroll.");
+      return;
+    }
     setBusy(button);
     state.enrollmentLog = ["Starting enrollment. Follow the reader prompts."];
     state.activeEnrollJobId = null;
@@ -511,8 +559,8 @@ async function renderEnrollPanel() {
     renderEnrollmentLog();
     try {
       const start = await invoke("start_fingerprint_enroll", {
-        employeeId: form.get("employee_id"),
-        finger: form.get("finger") || "right-index",
+        employeeId,
+        finger,
       });
       state.activeEnrollJobId = start.job_id;
       // Show Cancel button inline — no re-render to avoid re-binding submit handler
@@ -908,8 +956,6 @@ async function renderDatabasePanel() {
     state.adminDbTable = tables[0]?.name || "employees";
   }
   const data = await invoke("list_admin_table_rows", { table: state.adminDbTable });
-  const storage = await invoke("storage_status");
-  const storageLine = `<div class="message">DB ${fmtBytes(storage.db_size_bytes)} · Disk ${Math.round(storage.disk_used_pct)}% used · ${fmtBytes(storage.disk_free_bytes)} free</div>`;
   const readOnly = !data.editable;
   const selected =
     state.selectedDbRow && state.selectedDbRow.table === data.table
@@ -933,8 +979,7 @@ async function renderDatabasePanel() {
       ${readOnly ? '' : `<button class="ghost" data-new-db-row>New Row</button>`}
       <button class="ghost" data-refresh>Refresh</button>
     `,
-    storageLine +
-      (readOnly
+    (readOnly
       ? `<div class="message">This table is read-only. Use the dedicated panel to manage records.</div>
          ${table(
            visibleColumns.map((column) => column.label),
@@ -1015,6 +1060,38 @@ async function renderDatabasePanel() {
       });
     });
   }
+}
+
+// ==================== Admin: About Panel ====================
+
+async function renderAboutPanel() {
+  const storage = await invoke("storage_status");
+  setPanel(
+    "About",
+    `<button class="ghost" data-refresh>Refresh</button>`,
+    `
+      <div class="about-sections">
+        <div class="form-section stack">
+          <h3 class="form-section-title plain">Storage</h3>
+          <div class="message">DB ${fmtBytes(storage.db_size_bytes)} · Disk ${Math.round(storage.disk_used_pct)}% used · ${fmtBytes(storage.disk_free_bytes)} free</div>
+        </div>
+        <div class="form-section stack">
+          <h3 class="form-section-title plain">Developer</h3>
+          <div class="about-dev">
+            <div class="about-dev-row">
+              <span class="about-dev-label">Name</span>
+              <span class="about-dev-value">Pankaj Sedhain</span>
+            </div>
+            <div class="about-dev-row">
+              <span class="about-dev-label">Email</span>
+              <a class="about-dev-value" href="mailto:sedhain.pankaj@gmail.com">sedhain.pankaj@gmail.com</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    `,
+  );
+  app.querySelector("[data-refresh]").addEventListener("click", renderAboutPanel);
 }
 
 // ==================== Admin: Payroll Panel ====================
@@ -1982,6 +2059,7 @@ const tabIcons = {
   time: "clock",
   logs: "list",
   database: "database",
+  about: "info",
   clock: "clock",
   cornice: "box",
   moulds: "map-pin",
@@ -2339,7 +2417,7 @@ function emptyEmployee() {
   return {
     id: "",
     name: "",
-    finger: "right-index",
+    finger: "",
     active: true,
     is_admin: false,
     permissions: ["clock"],

@@ -325,6 +325,19 @@ pub async fn save_employee(
         return Err("Employee name is required.".to_string());
     }
 
+    if input.expect_new {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM employees WHERE id = ? COLLATE NOCASE)",
+        )
+        .bind(input.id.trim())
+        .fetch_one(&state.db)
+        .await
+        .map_err(to_string)?;
+        if exists {
+            return Err("Employee ID already exists.".to_string());
+        }
+    }
+
     let now = crate::db::now_string();
     let password_hash = input
         .password

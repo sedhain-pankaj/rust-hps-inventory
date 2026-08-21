@@ -33,6 +33,8 @@ pub struct EmployeeInput {
     pub permissions: Vec<String>,
     #[serde(default = "default_staff_category")]
     pub staff_category: String,
+    #[serde(default)]
+    pub expect_new: bool,
 }
 
 fn default_staff_category() -> String {
