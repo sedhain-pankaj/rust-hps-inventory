@@ -29,9 +29,9 @@ The fingerprint stack is shared via the C helper binary:
 ### Persistence
 - SQLite DB: `hps.db` (repo root)
 - Fingerprint temp/cache files: `data/fingerprints/`
-  - Enrollment writes `<employee_id>-<N>.fpdata` (3 templates per finger), persists to SQLite, removes temp files.
+  - Enrollment writes `<employee_id>.fpdata` (single template), persists to SQLite, removes temp files.
   - Identify exports templates from SQLite to `data/fingerprints/`, then clears cache after scan.
-- `fingerprint_templates` table: one row per `(employee_id, finger, template_index)`. Multi-template enrollment stores 3 templates per finger for higher match accuracy.
+- `fingerprint_templates` table: one row per `employee_id` (single template). Columns: `employee_id` (PK), `finger` (the enrolled finger), `template` (BLOB), `updated_at`.
 
 ---
 
@@ -49,7 +49,6 @@ The fingerprint stack is shared via the C helper binary:
   - `ENROLLED|...`
   - `MATCH|...`
   - `NO_MATCH`
-  - `TEMPLATE|N|total` (multi-template enrollment: which template is being captured)
   - `ATTEMPT|N|3|waiting` (identify: which scan attempt is in progress)
 
 Only these protocol lines are consumed by Rust from helper output.
@@ -71,29 +70,15 @@ minutiae matcher. Understanding its parameters is essential for tuning accuracy.
 
 | Parameter | File | Value | Effect |
 |---|---|---|---|
-| `score_threshold` | `cs9711.c` | **24** | Min consistent angle pairs. Lower = more lenient. Default was 40 (too strict for press-type sensor). |
-| `distance_match` | `sigfm.cpp` | **0.80** | Ratio test threshold. Higher = accepts more borderline keypoints. Default was 0.75. |
+| `score_threshold` | `cs9711.c` | **40** (default) | Min consistent angle pairs. No override in the driver — uses the SIGFM default. |
+| `distance_match` | `sigfm.cpp` | **0.75** | Ratio test threshold. Higher = accepts more borderline keypoints. |
 | `length_match` | `sigfm.cpp` | 0.05 | Geometric length tolerance. |
 | `angle_match` | `sigfm.cpp` | 0.05 | Geometric angle tolerance. |
 | `min_match` | `sigfm.cpp` | 5 | Min keypoints required before scoring. |
 
-### Why threshold 40 failed
-With threshold 40, the algorithm needs **10+ SIFT keypoints** with near-perfect geometric
-consistency. A press-type sensor shifts the finger 1–2 mm between scans, breaking angle
-consistency for a few keypoints and dropping the score below 40. Threshold 24 requires only
-**8+ consistent keypoints** — still secure (SIFT keypoints are unique per fingerprint) but
-robust to minor position drift.
-
-### Multi-template enrollment
-Instead of storing 1 template per finger, we store **3**. Each enrollment run captures a
-slightly different set of SIFT keypoints. During identify, the gallery contains all 3
-templates per employee — if ANY matches, the employee is recognized. This compounds the
-accuracy gain from the threshold change.
-
-- Helper command: `enroll-multi <storage> <employee_id> <finger> 3`
-- Runs 3 enrollment cycles (15 stages each) in a single device session (avoids USB open/close issues)
-- Produces `<id>-1.fpdata`, `<id>-2.fpdata`, `<id>-3.fpdata`
-- Rust strips the `-{index}` suffix from `MATCH|<id>-<N>` to get the real employee_id
+The driver runs with the **default SIGFM parameters** (no custom `score_threshold`
+override in `cs9711.c`, `distance_match = 0.75`). Enrollment stores a **single template**
+per employee (`<employee_id>.fpdata`); there is no multi-template mode.
 
 ---
 
@@ -167,13 +152,9 @@ cargo build --release
 
 Direct helper smoke test:
 ```bash
-# Single template (legacy)
+# Enroll (single template)
 LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
   libfprint-CS9711/build/examples/employee-clock-helper enroll /tmp/fp-test EMP001 right-index
-
-# Multi-template (3 templates, current default)
-LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
-  libfprint-CS9711/build/examples/employee-clock-helper enroll-multi /tmp/fp-test EMP001 right-index 3
 
 # Identify
 LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
