@@ -6,7 +6,7 @@ import {
   todayIso,
   weekStartIso,
 } from "./api.js";
-import { alertModal, confirmModal, requestAuth } from "./auth.js";
+import { alertModal, confirmModal, promptModal, requestAuth } from "./auth.js";
 import { icon } from "./icons.js";
 import { createTableStore, mountInlineTable } from "./table.js";
 import { mountRatesCardGrid, openRateAddModal } from "./rates-cards.js";
@@ -939,11 +939,22 @@ async function renderTimePanel() {
   app.querySelectorAll("[data-edit-clock]").forEach(btn => {
     btn.addEventListener("click", async () => {
       const eventId = Number(btn.dataset.editClock);
-      const field = prompt("Field to edit (timestamp, action, work_date, source, note):");
+      const field = await promptModal({
+        title: "Edit Clock Event",
+        label: "Field to edit (timestamp, action, work_date, source, note)",
+      }).catch(() => null);
       if (!field) return;
-      const newVal = prompt(`New value for "${field}":`);
+      const newVal = await promptModal({
+        title: "Edit Clock Event",
+        label: `New value for "${field}"`,
+      }).catch(() => null);
       if (newVal === null) return;
-      const reason = prompt("Reason for edit (audit trail):") || "";
+      const reason =
+        (await promptModal({
+          title: "Edit Clock Event",
+          label: "Reason for edit (audit trail)",
+          confirmLabel: "Save",
+        }).catch(() => "")) || "";
       try {
         await invoke("edit_clock_event", {
           input: {
@@ -956,7 +967,7 @@ async function renderTimePanel() {
         });
         renderTimePanel();
       } catch (e) {
-        alert(`Error: ${e}`);
+        await alertModal({ title: "Edit Clock Event", message: `Error: ${e}` });
       }
     });
   });
@@ -1234,7 +1245,11 @@ async function renderPayrollPanel() {
         app.querySelectorAll("[data-resolve-rate]").forEach(btn => {
           btn.addEventListener("click", async () => {
             const model = btn.dataset.model;
-            const uv = prompt(`Enter unit value for cornice "${model}" (lengths-to-units ratio):`);
+            const uv = await promptModal({
+              title: "Set Rate",
+              label: `Unit value for cornice "${model}" (lengths-to-units ratio)`,
+              confirmLabel: "Set Rate",
+            }).catch(() => null);
             if (uv && !isNaN(uv) && parseFloat(uv) > 0) {
               try {
                 await invoke("resolve_unknown_rate", {
@@ -1246,7 +1261,7 @@ async function renderPayrollPanel() {
                 });
                 renderPayrollPanel();
               } catch (e) {
-                alert(`Error: ${e}`);
+                await alertModal({ title: "Set Rate", message: `Error: ${e}` });
               }
             }
           });
@@ -1254,7 +1269,12 @@ async function renderPayrollPanel() {
 
         app.querySelectorAll("[data-proration-accept]").forEach(btn => {
           btn.addEventListener("click", async () => {
-            if (!confirm("Accept the prorated unit threshold for this employee?")) return;
+            const accept = await confirmModal({
+              title: "Weekly Payroll",
+              body: "Accept the prorated unit threshold for this employee?",
+              confirmLabel: "Accept",
+            }).catch(() => false);
+            if (!accept) return;
             await invoke("override_payroll_proration", {
               input: {
                 employee_id: btn.dataset.emp,
@@ -1268,7 +1288,12 @@ async function renderPayrollPanel() {
 
         app.querySelectorAll("[data-proration-override]").forEach(btn => {
           btn.addEventListener("click", async () => {
-            if (!confirm("Override to standard 40-hr / 180-unit week for this employee?")) return;
+            const override = await confirmModal({
+              title: "Weekly Payroll",
+              body: "Override to standard 40-hr / 180-unit week for this employee?",
+              confirmLabel: "Override",
+            }).catch(() => false);
+            if (!override) return;
             await invoke("override_payroll_proration", {
               input: {
                 employee_id: btn.dataset.emp,
@@ -1355,13 +1380,17 @@ async function renderMouldLocationsPanel() {
     extraActions: `<button class="ghost" data-add-loc>${icon("plus", 18)} Add Location</button>`,
     onRendered: (el) => {
       el.querySelector("[data-add-loc]")?.addEventListener("click", async () => {
-        const name = prompt("New mould location name:");
+        const name = await promptModal({
+          title: "Mould Locations",
+          label: "New mould location name",
+          confirmLabel: "Add",
+        }).catch(() => null);
         if (!name || !name.trim()) return;
         try {
           await invoke("save_mould_location", { input: { id: null, name: name.trim() } });
           renderMouldLocationsPanel();
         } catch (error) {
-          alert(String(error.message || error));
+          await alertModal({ title: "Mould Locations", message: String(error.message || error) });
         }
       });
     },
@@ -1393,12 +1422,17 @@ async function renderMouldLocationsPanel() {
   });
   locations.filter((loc) => loc.sort_order >= 3).forEach((loc) => {
     app.querySelector(`[data-del-loc="${loc.id}"]`)?.addEventListener("click", async () => {
-      if (!confirm(`Delete location "${loc.name}"? Only works when it has no moulds.`)) return;
+      const confirmed = await confirmModal({
+        title: "Mould Locations",
+        body: `Delete location "${loc.name}"? Only works when it has no moulds.`,
+        confirmLabel: "Delete",
+      }).catch(() => false);
+      if (!confirmed) return;
       try {
         await invoke("delete_mould_location", { id: loc.id });
         renderMouldLocationsPanel();
       } catch (error) {
-        alert(String(error.message || error));
+        await alertModal({ title: "Mould Locations", message: String(error.message || error) });
       }
     });
   });
@@ -1986,7 +2020,12 @@ async function renderDriverDispatchView() {
 
   app.querySelectorAll("[data-deliver-order]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      const remarks = prompt("Delivery remarks (optional):") || "";
+      const remarks =
+        (await promptModal({
+          title: "Mark Delivered",
+          label: "Delivery remarks (optional)",
+          confirmLabel: "Deliver",
+        }).catch(() => "")) || "";
       await invoke("update_dispatch_order", {
         input: {
           id: Number(btn.dataset.deliverOrder),

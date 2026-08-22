@@ -138,7 +138,6 @@ Use these when validating expected UX/progress wording and subprocess behavior.
 |---|---|---|
 | `HPS_FINGERPRINT_HELPER` | Override helper binary path | auto-detected |
 | `HPS_FINGERPRINT_TIMEOUT` | Helper timeout seconds | `360` |
-| `HPS_FINGERPRINT_ATTEMPTS` | Identify retry attempts | `5` |
 
 ---
 

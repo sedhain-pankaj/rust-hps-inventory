@@ -266,6 +266,60 @@ export function alertModal({ title, message, okLabel = "OK" }) {
   });
 }
 
+export function promptModal({
+  title,
+  label = "",
+  placeholder = "",
+  initialValue = "",
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+}) {
+  return new Promise((resolve, reject) => {
+    modalRoot.innerHTML = `
+      <div class="modal-backdrop">
+        <section class="modal" role="dialog" aria-modal="true">
+          <header>
+            <h2>${escapeHtml(title)}</h2>
+            <button class="icon ghost" data-close title="Close">${icon("x")}</button>
+          </header>
+          <div class="body">
+            ${
+              label
+                ? `<label class="rate-add-field">${escapeHtml(label)}
+                  <input data-prompt-input type="text" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(initialValue)}" />
+                </label>`
+                : ""
+            }
+          </div>
+          <footer>
+            <button class="ghost" data-cancel>${escapeHtml(cancelLabel)}</button>
+            <button class="primary" data-confirm>${escapeHtml(confirmLabel)}</button>
+          </footer>
+        </section>
+      </div>
+    `;
+    const input = modalRoot.querySelector("[data-prompt-input]");
+    const cancel = () => {
+      closeModal();
+      reject(new Error("Cancelled."));
+    };
+    const confirm = () => {
+      const value = input ? input.value : "";
+      closeModal();
+      resolve(value);
+    };
+    modalRoot.querySelector("[data-close]").addEventListener("click", cancel);
+    modalRoot.querySelector("[data-cancel]").addEventListener("click", cancel);
+    modalRoot.querySelector("[data-confirm]").addEventListener("click", confirm);
+    if (input) {
+      input.focus();
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") confirm();
+      });
+    }
+  });
+}
+
 export function confirmModal({
   title,
   body = "",

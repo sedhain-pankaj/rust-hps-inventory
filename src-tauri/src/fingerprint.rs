@@ -102,16 +102,11 @@ pub async fn identify_employee(
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
 
-    let max_attempts = env::var("HPS_FINGERPRINT_ATTEMPTS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(3);
     // Cap at 1 outer spawn — the helper already retries 3 times internally.
     // Multiple spawns cause repeated open/close cycles that leave the CS9711
     // USB device locked ("Resource busy [-6]"). The helper handles retry/NO_MATCH
     // itself; re-spawning just poisons the device for subsequent enroll.
-    let attempts = if max_attempts <= 1 { 1 } else { 1 };
+    let attempts = 1;
     let mut last_error = None;
     let mut last_retry = None;
     let mut scan_attempts = 0;

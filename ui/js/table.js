@@ -1,4 +1,5 @@
 import { escapeHtml } from "./api.js";
+import { alertModal } from "./auth.js";
 import { icon } from "./icons.js";
 
 // Draft store shared by one or more inline tables within a single panel.
@@ -96,7 +97,7 @@ export function createTableStore({ commit, onDone }) {
     actionsEl.innerHTML = `${extraActions}${right}`;
     actionsEl.querySelector("[data-store-save]")?.addEventListener("click", () => {
       saveAll().catch((error) => {
-        alert(String((error && error.message) || error));
+        alertModal({ title: "Save Changes", message: String((error && error.message) || error) });
       });
     });
     actionsEl.querySelector("[data-store-discard]")?.addEventListener("click", () => {
