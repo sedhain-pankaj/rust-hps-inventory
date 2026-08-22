@@ -2144,7 +2144,8 @@ async function renderStaffPayroll() {
     body += `<tr><td>Known Units</td><td>${payroll.total_units_known.toFixed(1)}</td></tr>`;
     body += `<tr><td>Unit Threshold</td><td>${payroll.unit_threshold.toFixed(0)} <small>(${escapeHtml(payroll.threshold_note)})</small></td></tr>`;
     if (payroll.extra_unit_pay > 0) {
-      body += `<tr><td>Extra Unit Pay (${payroll.total_units_known - payroll.unit_threshold} extra × $3.80)</td><td><strong>$${payroll.extra_unit_pay.toFixed(2)}</strong></td></tr>`;
+      const extraUnits = Math.round((payroll.total_units_known - payroll.unit_threshold) * 100) / 100;
+      body += `<tr><td>Extra Unit Pay (${extraUnits} extra × $3.80)</td><td><strong>$${payroll.extra_unit_pay.toFixed(2)}</strong></td></tr>`;
     }
     if (payroll.gross_pay !== null && payroll.gross_pay !== undefined) {
       body += `<tr style="font-size:1.2em"><td><strong>Gross Pay</strong></td><td><strong>$${payroll.gross_pay.toFixed(2)}</strong></td></tr>`;

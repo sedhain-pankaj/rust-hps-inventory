@@ -2273,6 +2273,12 @@ struct PayrollMath {
     status: String,
 }
 
+/// Round to cents — keeps stored/sent money values free of IEEE-754 noise
+/// (e.g. 209.9 - 180 = 29.900000000000006).
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
 /// Pure payroll math: splits cornice rows into known units and unknown-rate
 /// details, then computes pay. The first 180 made units are included in base
 /// pay; each unit above that earns the extra unit rate. Any custom or
@@ -2299,6 +2305,7 @@ fn compute_payroll(rows: &[CorniceRowForPay]) -> PayrollMath {
             total_units_known += uv * row.lengths as f64;
         }
     }
+    let total_units_known = round2(total_units_known);
     let total_units_unknown: f64 = unknown_details.iter().map(|d| d.quantity as f64).sum();
 
     let (gross_pay, extra_unit_pay, pay_equation, status) = if !unknown_details.is_empty() {
@@ -2316,9 +2323,9 @@ fn compute_payroll(rows: &[CorniceRowForPay]) -> PayrollMath {
         );
         (None, 0.0, eq, "unresolved".to_string())
     } else {
-        let extra_units = (total_units_known - UNIT_THRESHOLD).max(0.0);
-        let eup = extra_units * EXTRA_UNIT_RATE;
-        let gp = BASE_PAY + eup;
+        let extra_units = round2((total_units_known - UNIT_THRESHOLD).max(0.0));
+        let eup = round2(extra_units * EXTRA_UNIT_RATE);
+        let gp = round2(BASE_PAY + eup);
         let eq = format!(
             "${:.2} (base) + ${:.2} ({:.0} extra units × $3.80) = ${:.2}",
             BASE_PAY, eup, extra_units, gp

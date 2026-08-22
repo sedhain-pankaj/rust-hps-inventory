@@ -655,6 +655,31 @@ async fn run_data_migrations(db: &SqlitePool) -> Result<()> {
     .execute(db)
     .await?;
 
+    // 5. Round float noise in legacy amount rows (written before payroll math
+    //    rounded to cents). Idempotent; only touches rows that carry noise.
+    sqlx::query(
+        r#"
+        UPDATE payroll_periods
+        SET total_units_known = ROUND(total_units_known, 2),
+            extra_unit_pay = ROUND(extra_unit_pay, 2),
+            gross_pay = ROUND(gross_pay, 2)
+        WHERE total_units_known != ROUND(total_units_known, 2)
+           OR extra_unit_pay != ROUND(extra_unit_pay, 2)
+           OR gross_pay != ROUND(gross_pay, 2)
+        "#,
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE cornice_logs
+        SET total_units = ROUND(total_units, 2)
+        WHERE total_units != ROUND(total_units, 2)
+        "#,
+    )
+    .execute(db)
+    .await?;
+
     Ok(())
 }
 
