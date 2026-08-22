@@ -24,8 +24,10 @@ const state = {
   adminDbTable: "employees",
   selectedDbRow: null,
   enrollmentLog: [],
-  staffView: "clock",
+  staffView: null,
+  staffTabs: [],
   selectedEmployee: null,
+  employeeFormMode: null,
   stockFilter: "all",
   corniceRateMatches: [],
   // Session management
@@ -263,7 +265,7 @@ async function renderStaffPicker() {
         state.currentStaff = response.employee;
         state.sessionSource = response.source;
         startSession(response.employee, "staff");
-        state.staffView = "clock";
+        state.staffView = null;
         renderStaffDashboard();
       } catch {
         // Auth failed or cancelled — stay on list
@@ -359,17 +361,63 @@ async function renderAlertsPanel() {
 
 async function renderEmployeesPanel() {
   const employees = await invoke("list_staff", { includeInactive: true });
-  const selected = state.selectedEmployee || emptyEmployee();
+  if (state.employeeFormMode === "new" || state.employeeFormMode === "edit") {
+    return renderEmployeeForm(employees);
+  }
   setPanel(
     "Employees",
-    `<button class="ghost" data-new-employee>New</button>`,
+    `<button class="primary" data-new-employee>Add New Employee</button>`,
+    table(
+      ["Name", "ID", "Role", "Admin", "Password", "Fingerprint", "Active"],
+      employees.map((employee) => ({
+        clickable: true,
+        attrs: `data-select-employee="${escapeHtml(employee.id)}"`,
+        cells: [
+          employee.name,
+          employee.id,
+          (employee.staff_category || 'cornice_hand').replace('_', ' '),
+          employee.is_admin ? "Yes" : "No",
+          employee.has_password ? "Set" : "No",
+          employee.has_fingerprint ? "Enrolled" : "No",
+          employee.active ? "Yes" : "No",
+        ],
+      })),
+    ),
+  );
+
+  app.querySelector("[data-new-employee]").addEventListener("click", () => {
+    state.selectedEmployee = emptyEmployee();
+    state.employeeFormMode = "new";
+    renderEmployeesPanel();
+  });
+  app.querySelectorAll("[data-select-employee]").forEach((row) => {
+    row.addEventListener("click", () => {
+      state.selectedEmployee = employees.find((item) => item.id === row.dataset.selectEmployee);
+      state.employeeFormMode = "edit";
+      renderEmployeesPanel();
+    });
+  });
+}
+
+function renderEmployeeForm(employees) {
+  const mode = state.employeeFormMode === "new" ? "new" : "edit";
+  const isNew = mode === "new";
+  const selected = state.selectedEmployee || emptyEmployee();
+  setPanel(
+    mode === "new" ? "Add New Employee" : "Edit Existing Employee",
+    `
+      <button class="ghost" data-employee-back>Back to Employee List</button>
+      <button class="primary" data-save-employee>Save Employee</button>
+    `,
     `
       <form class="form-grid" data-employee-form>
         <div class="form-section">
           <h3 class="form-section-title">Details</h3>
           <label><span>Employee ID<span class="req">*</span></span><input name="id" required data-employee-id value="${escapeHtml(selected.id)}" /><span class="field-error" data-id-error></span></label>
           <label><span>Name<span class="req">*</span></span><input name="name" required value="${escapeHtml(selected.name)}" /></label>
-          <label>Password<input name="password" type="password" placeholder="Leave blank to keep current password" /></label>
+          <label><span>Password${isNew ? '<span class="req">*</span>' : ""}</span><input name="password" type="password" ${isNew ? 'required placeholder="Type your password"' : ""} autocomplete="new-password" />${isNew ? "" : '<span class="field-hint">Leave this field empty to keep current password</span>'}</label>
+          <label><span>Confirm Password${isNew ? '<span class="req">*</span>' : ""}</span><input name="confirm_password" type="password" ${isNew ? "required" : ""} autocomplete="new-password" /></label>
+          <div class="wide password-match" data-password-match></div>
         </div>
         <div class="form-section">
           <h3 class="form-section-title">Account</h3>
@@ -401,39 +449,15 @@ async function renderEmployeesPanel() {
               .join("")}
           </div>
         </div>
-        <div class="wide panel-actions">
-          <button class="primary" type="submit">Save Employee</button>
-        </div>
       </form>
-      ${table(
-        ["Name", "ID", "Role", "Admin", "Password", "Fingerprint", "Active"],
-        employees.map((employee) => ({
-          clickable: true,
-          attrs: `data-select-employee="${escapeHtml(employee.id)}"`,
-          cells: [
-            employee.name,
-            employee.id,
-            (employee.staff_category || 'cornice_hand').replace('_', ' '),
-            employee.is_admin ? "Yes" : "No",
-            employee.has_password ? "Set" : "No",
-            employee.has_fingerprint ? "Enrolled" : "No",
-            employee.active ? "Yes" : "No",
-          ],
-        })),
-      )}
     `,
   );
 
-  app.querySelector("[data-new-employee]").addEventListener("click", () => {
-    state.selectedEmployee = emptyEmployee();
+  app.querySelector("[data-employee-back]").addEventListener("click", () => {
+    state.employeeFormMode = null;
     renderEmployeesPanel();
   });
-  app.querySelectorAll("[data-select-employee]").forEach((row) => {
-    row.addEventListener("click", () => {
-      state.selectedEmployee = employees.find((item) => item.id === row.dataset.selectEmployee);
-      renderEmployeesPanel();
-    });
-  });
+
   const employeeForm = app.querySelector("[data-employee-form");
   const idInput = employeeForm.querySelector("[data-employee-id]");
   const idError = employeeForm.querySelector("[data-id-error]");
@@ -444,17 +468,58 @@ async function renderEmployeesPanel() {
   idInput.addEventListener("input", () => {
     idError.textContent = "";
   });
+
+  const passwordInput = employeeForm.querySelector('[name="password"]');
+  const confirmInput = employeeForm.querySelector('[name="confirm_password"]');
+  const matchEl = employeeForm.querySelector("[data-password-match]");
+  const updatePasswordMatch = () => {
+    const password = passwordInput.value;
+    const confirm = confirmInput.value;
+    if (!password && !confirm) {
+      matchEl.textContent = "";
+      matchEl.className = "wide password-match";
+      return;
+    }
+    if (password === confirm) {
+      matchEl.textContent = "✓ Password matches";
+      matchEl.className = "wide password-match ok";
+    } else {
+      matchEl.textContent = "✗ Password don't match";
+      matchEl.className = "wide password-match err";
+    }
+  };
+  passwordInput.addEventListener("input", updatePasswordMatch);
+  confirmInput.addEventListener("input", updatePasswordMatch);
+
+  app.querySelector("[data-save-employee]").addEventListener("click", () => {
+    employeeForm.requestSubmit();
+  });
+
   employeeForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const permissions = form.getAll("permission");
     const newId = String(form.get("id")).trim();
     const originalId = selected.id.trim();
+    const password = String(form.get("password") || "");
+    const confirmPassword = String(form.get("confirm_password") || "");
     if (
       newId !== originalId &&
       employees.some((item) => item.id.trim().toLowerCase() === newId.toLowerCase())
     ) {
       setIdError("Employee ID already exists.");
+      return;
+    }
+    if (isNew && !password) {
+      matchEl.textContent = "✗ Password is required";
+      matchEl.className = "wide password-match err";
+      passwordInput.focus();
+      return;
+    }
+    if (password && password !== confirmPassword) {
+      matchEl.textContent = "✗ Password don't match";
+      matchEl.className = "wide password-match err";
+      confirmInput.focus();
       return;
     }
     try {
@@ -465,7 +530,7 @@ async function renderEmployeesPanel() {
           finger: selected.finger || "right-index",
           active: form.get("active") === "on",
           is_admin: form.get("is_admin") === "on",
-          password: form.get("password"),
+          password: password || null,
           permissions,
           staff_category: form.get("staff_category") || "cornice_hand",
           expect_new: originalId === "",
@@ -475,6 +540,7 @@ async function renderEmployeesPanel() {
       setIdError(String(error.message || error));
       return;
     }
+    state.employeeFormMode = null;
     renderEmployeesPanel();
   });
 }
@@ -488,7 +554,7 @@ async function renderEnrollPanel() {
     `<button class="ghost" data-refresh>Refresh</button>`,
     `
       <form class="form-grid" data-enroll-form>
-        <label class="wide"><span>Employee<span class="req">*</span></span>
+        <label><span>Employee<span class="req">*</span></span>
           <select name="employee_id">
             <option value="" disabled ${selected.id ? "" : "selected"}>Select an employee</option>
             ${employees
@@ -508,11 +574,12 @@ async function renderEnrollPanel() {
             ${fingerOptions("")}
           </select>
         </label>
-        <div class="panel-actions">
+        <div class="wide enroll-actions">
           <button class="warning" type="submit">Enroll / Replace Fingerprint</button>
         </div>
       </form>
-      <div class="log-box" data-enrollment-log>
+      <h3>Enrollment Log</h3>
+      <div class="log-box enroll-log" data-enrollment-log>
         ${
           log.length
             ? log.map((line) => `<div>${escapeHtml(formatFingerprintLine(line))}</div>`).join("")
@@ -1411,25 +1478,27 @@ function getWeekStartForDate(dateStr) {
 function renderStaffDashboard() {
   const employee = state.currentStaff;
   const category = employee.staff_category || "cornice_hand";
-  const tabs = [["clock", "Clock"]];
-  if (category === "cornice_hand" && employee.permissions.includes("cornice_log")) {
+  const hasPermission = (permission) => (employee.permissions || []).includes(permission);
+  const tabs = [];
+  if (hasPermission("clock")) tabs.push(["clock", "Clock"]);
+  if (category === "cornice_hand" && hasPermission("cornice_log")) {
     tabs.push(["cornice", "Cornice"]);
     tabs.push(["payroll", "My Payroll"]);
   }
   if (category === "storekeeper") {
-    if (employee.permissions.includes("cornice_log")) tabs.push(["cornice", "Cornice Logs"]);
+    if (hasPermission("cornice_log")) tabs.push(["cornice", "Cornice Logs"]);
     tabs.push(["moulds", "Moulds"]);
     tabs.push(["cornice_stock", "Stock"]);
-    if (employee.permissions.includes("production_log")) tabs.push(["production", "Production"]);
-    if (employee.permissions.includes("deliveries")) tabs.push(["deliveries", "Deliveries"]);
+    if (hasPermission("production_log")) tabs.push(["production", "Production"]);
+    if (hasPermission("deliveries")) tabs.push(["deliveries", "Deliveries"]);
   }
-  if (category === "non_cornice" && employee.permissions.includes("production_log")) {
+  if (category === "non_cornice" && hasPermission("production_log")) {
     tabs.push(["production", "Production"]);
     tabs.push(["payroll", "My Payroll"]);
   }
   if (category === "driver") {
     tabs.push(["dispatch", "Dispatch Orders"]);
-    if (employee.permissions.includes("deliveries")) tabs.push(["deliveries", "Deliveries"]);
+    if (hasPermission("deliveries")) tabs.push(["deliveries", "Deliveries"]);
     tabs.push(["moulds", "Moulds"]);
   }
   if (category === "helper") {
@@ -1437,8 +1506,13 @@ function renderStaffDashboard() {
     tabs.push(["cornice_stock_ro", "Stock"]);
   }
   // Legacy permissions fallback
-  if (employee.permissions.includes("overstock")) tabs.push(["overstock", "Overstock"]);
-  if (employee.permissions.includes("cornice_rates_view")) tabs.push(["rates", "Rates"]);
+  if (hasPermission("overstock")) tabs.push(["overstock", "Overstock"]);
+  if (hasPermission("cornice_rates_view")) tabs.push(["rates", "Rates"]);
+
+  state.staffTabs = tabs.map(([id]) => id);
+  if (!state.staffTabs.includes(state.staffView)) {
+    state.staffView = state.staffTabs[0] || null;
+  }
 
   app.innerHTML = workspaceShell("Staff", employee.name, tabs, state.staffView);
   app.querySelector("[data-back]").addEventListener("click", () => { endSession(); renderHome(); });
@@ -1461,6 +1535,10 @@ function switchStaffTab(id) {
 
 async function renderStaffPanel() {
   const view = state.staffView;
+  if (!view || !state.staffTabs.includes(view)) {
+    setPanel("Staff", "", `<div class="empty">No access — this account has no enabled permissions.</div>`);
+    return;
+  }
   if (view === "clock") return renderStaffClock();
   if (view === "cornice") return renderStaffCornice();
   if (view === "production") return renderStaffProduction();
@@ -1749,12 +1827,13 @@ async function renderStaffCornice() {
 }
 
 async function renderStaffProduction() {
+  const allProduction = (state.currentStaff.permissions || []).includes("daily_production_all");
   const logs = await invoke("list_production_logs", {
-    employeeId: state.currentStaff.id,
+    employeeId: allProduction ? null : state.currentStaff.id,
     date: null,
   });
   setPanel(
-    "Production Log",
+    allProduction ? "Production Log (All Staff)" : "Production Log",
     "",
     `
       <form class="form-grid" data-production-form>

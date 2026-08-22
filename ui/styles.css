@@ -861,6 +861,11 @@ label {
   font-size: 0.85rem;
 }
 
+.field-hint {
+  color: var(--text-3);
+  font-size: 0.82rem;
+}
+
 .field-error:empty {
   display: none;
 }
@@ -964,6 +969,36 @@ a.about-dev-value:hover {
   color: var(--text-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 0.92rem;
+}
+
+.enroll-log {
+  max-height: 280px;
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  line-height: 1.8;
+  font-size: 0.95rem;
+}
+
+.enroll-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  justify-content: flex-start;
+}
+
+.password-match {
+  min-height: 1.4em;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.password-match.ok {
+  color: var(--ok);
+}
+
+.password-match.err {
+  color: var(--err);
 }
 
 /* ---------- Metrics ---------- */
