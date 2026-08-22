@@ -20,6 +20,7 @@ The fingerprint stack is shared via the C helper binary:
 - `src-tauri/src/commands.rs`: Tauri commands and enrollment orchestration
 - `src-tauri/src/fingerprint.rs`: helper discovery, spawn, protocol parsing, template import/export
 - `src-tauri/src/db.rs`: app paths, SQLite init, shared app state
+- `src-tauri/src/backup.rs`: VACUUM INTO backups, weekly/monthly scheduler, retention, `exit_kiosk`
 - `src-tauri/src/models.rs`: command response/request models
 
 ### Frontend (Web UI)
@@ -32,6 +33,51 @@ The fingerprint stack is shared via the C helper binary:
   - Enrollment writes `<employee_id>.fpdata` (single template), persists to SQLite, removes temp files.
   - Identify exports templates from SQLite to `data/fingerprints/`, then clears cache after scan.
 - `fingerprint_templates` table: one row per `employee_id` (single template). Columns: `employee_id` (PK), `finger` (the enrolled finger), `template` (BLOB), `updated_at`.
+- Database backups: `data/backup/weekly/` and `data/backup/monthly/` (see Database Backup & Restore).
+
+---
+
+## Database Backup & Restore
+
+Everything lives in `hps.db` (employees, fingerprint templates, payroll, logs, stock, media BLOBs).
+`data/fingerprints/` is ephemeral cache — never backed up.
+
+### Mechanism
+`VACUUM INTO '<path>'` — SQLite's consistent online copy, WAL-safe, no extra dependencies.
+Implemented in `src-tauri/src/backup.rs` (`backup_now`).
+
+### Layout, schedule, retention
+| Tier | Location | When | Retention |
+|---|---|---|---|
+| weekly | `data/backup/weekly/hps-YYYYMMDD-HHMMSS.db` | Sundays ≥12:00, if no backup for the current ISO week | newest 4 |
+| monthly | `data/backup/monthly/hps-YYYYMMDD-HHMMSS.db` | first Sunday of month ≥12:00, if no backup for the current calendar month | newest 12 |
+
+- A scheduler thread (`spawn_scheduler`, started in `lib.rs` setup) ticks every 60s; the first tick
+  runs at startup, so a missed Sunday (kiosk powered off) is caught up on next start.
+- Manual "Backup now" (admin About panel) always writes to `weekly/` and counts against the 4-file cap.
+- A failed backup inserts an `admin_notifications` row (severity `yellow`, kind `backup`) — visible
+  in the Admin Alerts tab.
+
+### Commands
+- `create_database_backup` → manual backup into `weekly/`
+- `backup_status` → `{ weekly: {count, latest}, monthly: {count, latest} }` for the About panel
+- `exit_kiosk` → fingerprint-gated shutdown (see below)
+
+### Restore (manual, offline)
+1. Stop the app (kill the process).
+2. `cp data/backup/weekly/hps-<timestamp>.db hps.db`
+3. Delete stale WAL sidecars: `rm -f hps.db-wal hps.db-shm`
+4. Start the app, then verify: `sqlite3 hps.db "PRAGMA integrity_check;"` → expect `ok`.
+
+No source access or recompile is needed — the binary reads whatever `hps.db` sits next to it.
+Out of scope: offsite/remote sync (single kiosk, no network guarantee per spec).
+
+### Exit Kiosk
+The kiosk locks itself: `RunEvent::ExitRequested` calls `prevent_exit()` unless
+`AppState.allow_exit` is set. Only the `exit_kiosk` command sets it — the admin About panel's
+"Exit Kiosk" button first runs `requestAuth({ requireAdmin: true })` (same admin fingerprint modal
+as entering admin), then invokes `exit_kiosk` → `app.exit(0)`. Window min/max/close buttons are
+slated for removal in the final release.
 
 ---
 
@@ -138,6 +184,7 @@ Use these when validating expected UX/progress wording and subprocess behavior.
 |---|---|---|
 | `HPS_FINGERPRINT_HELPER` | Override helper binary path | auto-detected |
 | `HPS_FINGERPRINT_TIMEOUT` | Helper timeout seconds | `360` |
+| `HPS_BACKUP_FORCE` | Dev hook: force `weekly` / `monthly` / `both` backup on next scheduler tick | unset |
 
 ---
 

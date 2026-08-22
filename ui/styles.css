@@ -904,6 +904,34 @@ label:has(.field-error:not(:empty)) input {
   font-weight: 600;
 }
 
+.about-tier {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  padding: 10px 14px;
+  background: var(--bg-1);
+}
+
+.about-tier-label {
+  color: var(--text-3);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.about-tier-value {
+  color: var(--text-1);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.about-tier-sub {
+  color: var(--text-2);
+  font-size: 0.9rem;
+}
+
 a.about-dev-value {
   color: var(--brass);
   text-decoration: none;

@@ -1,7 +1,10 @@
+mod backup;
 mod commands;
 mod db;
 mod fingerprint;
 mod models;
+
+use std::sync::atomic::Ordering;
 
 use tauri::{Manager, WindowEvent};
 
@@ -12,7 +15,10 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let state = tauri::async_runtime::block_on(db::AppState::initialize(&handle))?;
+            let scheduler_db = state.db.clone();
+            let scheduler_paths = state.paths.clone();
             app.manage(state);
+            backup::spawn_scheduler(scheduler_db, scheduler_paths);
 
             if let Some(_window) = app.get_webview_window("main") {
                 // let _ = window.set_fullscreen(true);
@@ -89,13 +95,25 @@ pub fn run() {
             list_dispatch_orders,
             create_dispatch_order,
             update_dispatch_order,
+            // New: database backup + kiosk exit
+            backup::create_database_backup,
+            backup::backup_status,
+            backup::exit_kiosk,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Hopkins kiosk");
 
     app.run(|app_handle, event| match event {
         tauri::RunEvent::ExitRequested { api, .. } => {
-            api.prevent_exit();
+            // The kiosk locks itself against accidental exit; only the
+            // fingerprint-gated `exit_kiosk` command sets this flag.
+            let allow_exit = app_handle
+                .state::<db::AppState>()
+                .allow_exit
+                .load(Ordering::Relaxed);
+            if !allow_exit {
+                api.prevent_exit();
+            }
         }
         tauri::RunEvent::WindowEvent {
             event: WindowEvent::CloseRequested { api, .. },

@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -48,6 +48,9 @@ pub struct AppState {
     pub auth_jobs: Arc<Mutex<HashMap<String, FingerprintAuthJob>>>,
     pub auth_job_seq: Arc<AtomicU64>,
     pub active_helper_pids: Arc<Mutex<HashSet<u32>>>,
+    /// Set by the fingerprint-gated `exit_kiosk` command so the
+    /// `ExitRequested` handler allows the process to actually terminate.
+    pub allow_exit: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +136,7 @@ impl AppState {
             auth_jobs: Arc::new(Mutex::new(HashMap::new())),
             auth_job_seq: Arc::new(AtomicU64::new(0)),
             active_helper_pids: Arc::new(Mutex::new(HashSet::new())),
+            allow_exit: Arc::new(AtomicBool::new(false)),
         })
     }
 }

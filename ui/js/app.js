@@ -1142,8 +1142,24 @@ async function renderDatabasePanel() {
 
 // ==================== Admin: About Panel ====================
 
+function backupTierBlock(label, tier) {
+  if (!tier.latest) {
+    return `
+      <div class="about-tier">
+        <div class="about-tier-label">${label}</div>
+        <div class="about-tier-sub">None yet</div>
+      </div>`;
+  }
+  return `
+    <div class="about-tier">
+      <div class="about-tier-label">${label}</div>
+      <div class="about-tier-value">${escapeHtml(tier.latest.name)}</div>
+      <div class="about-tier-sub">${fmtBytes(tier.latest.size_bytes)}</div>
+    </div>`;
+}
+
 async function renderAboutPanel() {
-  const storage = await invoke("storage_status");
+  const [storage, backups] = await Promise.all([invoke("storage_status"), invoke("backup_status")]);
   const diskHot = storage.disk_used_pct > 90;
   const diskClass = diskHot ? "metric-err" : "";
   setPanel(
@@ -1169,7 +1185,29 @@ async function renderAboutPanel() {
           </div>
         </div>
         <div class="form-section stack">
-          <h3 class="form-section-title plain">Developer</h3>
+          <h3 class="form-section-title plain">Backup</h3>
+          <div class="about-dev">
+            ${backupTierBlock("Latest weekly", backups.weekly)}
+            ${backupTierBlock("Latest monthly", backups.monthly)}
+            <div class="about-tier">
+              <div class="about-tier-label">Automatic</div>
+              <div class="about-tier-sub">Weekly: Every Sunday at 12pm</div>
+              <div class="about-tier-sub">Monthly: First Sunday of the month at 12pm</div>
+            </div>
+          </div>
+          <div>
+            <button class="primary" data-backup-now>Backup now</button>
+          </div>
+        </div>
+        <div class="form-section stack">
+          <h3 class="form-section-title plain">Exit Kiosk</h3>
+          <div class="message">Authenticate with an admin fingerprint to shut down the kiosk.</div>
+          <div>
+            <button class="danger" data-exit-kiosk>Exit Kiosk</button>
+          </div>
+        </div>
+        <div class="form-section stack">
+          <h3 class="form-section-title plain">Contact Developer</h3>
           <div class="about-dev">
             <div class="about-dev-row">
               <span class="about-dev-label">Name</span>
@@ -1185,6 +1223,35 @@ async function renderAboutPanel() {
     `,
   );
   app.querySelector("[data-refresh]").addEventListener("click", renderAboutPanel);
+  app.querySelector("[data-backup-now]").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    setBusy(button);
+    try {
+      const info = await invoke("create_database_backup");
+      await alertModal({
+        title: "Database Backup",
+        message: `Backup created: ${info.name} (${fmtBytes(info.size_bytes)})`,
+      });
+    } catch (error) {
+      await alertModal({
+        title: "Database Backup",
+        message: `Backup failed: ${error.message || error}`,
+      });
+    }
+    renderAboutPanel();
+  });
+  app.querySelector("[data-exit-kiosk]").addEventListener("click", async () => {
+    try {
+      await requestAuth({ title: "Exit Kiosk", requireAdmin: true });
+    } catch {
+      return;
+    }
+    try {
+      await invoke("exit_kiosk");
+    } catch {
+      // The app is terminating; nothing else to do.
+    }
+  });
 }
 
 // ==================== Admin: Payroll Panel ====================

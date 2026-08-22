@@ -471,3 +471,24 @@ pub struct ClockStatus {
     pub today_state: String,
     pub missed_yesterday_clock_out: bool,
 }
+
+// Database backup status
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupInfo {
+    pub path: String,
+    pub name: String,
+    pub modified: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupTierStatus {
+    pub count: usize,
+    pub latest: Option<BackupInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupStatus {
+    pub weekly: BackupTierStatus,
+    pub monthly: BackupTierStatus,
+}
