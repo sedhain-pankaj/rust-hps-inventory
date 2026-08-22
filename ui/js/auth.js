@@ -236,6 +236,36 @@ export function requestAuth({ title, requireAdmin = false, employee = null }) {
   });
 }
 
+export function alertModal({ title, message, okLabel = "OK" }) {
+  return new Promise((resolve) => {
+    modalRoot.innerHTML = `
+      <div class="modal-backdrop">
+        <section class="modal" role="dialog" aria-modal="true">
+          <header>
+            <h2>${escapeHtml(title)}</h2>
+            <button class="icon ghost" data-close title="Close">${icon("x")}</button>
+          </header>
+          <div class="body">
+            <div class="auth-fp-icon">
+              <img src="./assets/noun-fingerprint-1377758.svg" alt="Fingerprint" width="72" height="72" />
+            </div>
+            <div class="scan-status warn">${escapeHtml(message)}</div>
+          </div>
+          <footer>
+            <button class="primary" data-ok>${escapeHtml(okLabel)}</button>
+          </footer>
+        </section>
+      </div>
+    `;
+    const close = () => {
+      closeModal();
+      resolve();
+    };
+    modalRoot.querySelector("[data-close]").addEventListener("click", close);
+    modalRoot.querySelector("[data-ok]").addEventListener("click", close);
+  });
+}
+
 export function confirmModal({
   title,
   body = "",

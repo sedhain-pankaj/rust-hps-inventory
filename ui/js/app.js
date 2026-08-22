@@ -6,7 +6,7 @@ import {
   todayIso,
   weekStartIso,
 } from "./api.js";
-import { confirmModal, requestAuth } from "./auth.js";
+import { alertModal, confirmModal, requestAuth } from "./auth.js";
 import { icon } from "./icons.js";
 import { createTableStore, mountInlineTable } from "./table.js";
 import { mountRatesCardGrid, openRateAddModal } from "./rates-cards.js";
@@ -612,11 +612,11 @@ async function renderEnrollPanel() {
     const employeeId = form.get("employee_id");
     const finger = form.get("finger");
     if (!employeeId) {
-      alert("Select an employee to enroll.");
+      await alertModal({ title: "Fingerprint Enrollment", message: "Select an employee to enroll." });
       return;
     }
     if (!finger) {
-      alert("Select the finger to enroll.");
+      await alertModal({ title: "Fingerprint Enrollment", message: "Select the finger to enroll." });
       return;
     }
     setBusy(button);
