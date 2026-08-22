@@ -1133,6 +1133,8 @@ async function renderDatabasePanel() {
 
 async function renderAboutPanel() {
   const storage = await invoke("storage_status");
+  const diskHot = storage.disk_used_pct > 90;
+  const diskClass = diskHot ? "metric-err" : "";
   setPanel(
     "About",
     `<button class="ghost" data-refresh>Refresh</button>`,
@@ -1140,7 +1142,20 @@ async function renderAboutPanel() {
       <div class="about-sections">
         <div class="form-section stack">
           <h3 class="form-section-title plain">Storage</h3>
-          <div class="message">DB ${fmtBytes(storage.db_size_bytes)} · Disk ${Math.round(storage.disk_used_pct)}% used · ${fmtBytes(storage.disk_free_bytes)} free</div>
+          <div class="about-dev">
+            <div class="about-dev-row">
+              <span class="about-dev-label">Database</span>
+              <span class="about-dev-value" title="${escapeHtml(storage.db_path)}">${fmtBytes(storage.db_size_bytes)}</span>
+            </div>
+            <div class="about-dev-row">
+              <span class="about-dev-label">Disk used</span>
+              <span class="about-dev-value ${diskClass}">${Math.round(storage.disk_used_pct)}% of ${fmtBytes(storage.disk_total_bytes)}</span>
+            </div>
+            <div class="about-dev-row">
+              <span class="about-dev-label">Disk free</span>
+              <span class="about-dev-value ${diskClass}">${fmtBytes(storage.disk_free_bytes)}</span>
+            </div>
+          </div>
         </div>
         <div class="form-section stack">
           <h3 class="form-section-title plain">Developer</h3>
@@ -1151,7 +1166,7 @@ async function renderAboutPanel() {
             </div>
             <div class="about-dev-row">
               <span class="about-dev-label">Email</span>
-              <a class="about-dev-value" href="mailto:sedhain.pankaj@gmail.com">sedhain.pankaj@gmail.com</a>
+              <span class="about-dev-value">sedhain.pankaj@gmail.com</span>
             </div>
           </div>
         </div>
