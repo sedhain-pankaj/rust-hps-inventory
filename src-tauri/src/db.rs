@@ -707,6 +707,8 @@ async fn split_ambiguous_cornice_units(db: &SqlitePool) -> Result<()> {
 }
 
 pub async fn run_cornice_unit_migrations(db: &SqlitePool) -> Result<()> {
+    sqlx::query("DROP TABLE IF EXISTS cornice_rate_values").execute(db).await?;
+    sqlx::query("DROP TABLE IF EXISTS cornice_series").execute(db).await?;
     if column_exists(db, "cornice_rates", "is_confidential").await {
         sqlx::query("ALTER TABLE cornice_rates DROP COLUMN is_confidential").execute(db).await?;
     }
