@@ -224,14 +224,23 @@ ninja -j$(nproc)
 
 ## graphify
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+This project has **two separate knowledge graphs**, each with god nodes, community structure, and cross-file relationships:
+
+| Graph | Location | Covers |
+|---|---|---|
+| app | `graphify-out/` (repo root) | The app: Rust/Tauri backend + UI + docs |
+| cs9711 | `libfprint-CS9711/graphify-out/` | The vendored C library: core, all drivers, SIGFM matcher, examples (incl. `employee-clock-helper.c`) |
 
 When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
 
 Rules:
 - For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Questions about the fingerprint driver internals (cs9711.c, sigfm.cpp, FpiSsm, USB transfer, other drivers) go to the cs9711 graph: `graphify query "<question>" --graph libfprint-CS9711/graphify-out/graph.json` (works from the repo root).
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
-- `.graphifyignore` excludes the vendored `libfprint-CS9711/` C library from the graph — the graph covers the app (Rust + UI + docs) only. Do not remove that exclusion; if the helper source (`libfprint-CS9711/examples/employee-clock-helper.c`) needs graph coverage, it is documented here in the Fingerprint sections instead.
+- **Update each graph from its own scan root — never update the cs9711 graph from the repo root:**
+  - App graph: `graphify update .` from the repo root (AST-only, no API cost).
+  - CS9711 graph: `cd libfprint-CS9711 && graphify update .` (or `/graphify .` with working directory `libfprint-CS9711/`). The root `.graphifyignore` excludes `libfprint-CS9711/`, so a root scan can never see or refresh it.
+- The root `.graphifyignore` excludes the vendored `libfprint-CS9711/` C library from the app graph. Do not remove that exclusion — the driver has its own graph instead.
+- The nested `libfprint-CS9711/.graphifyignore` contains `!libfprint/` and `!examples/` negations on purpose: graphify loads ancestor `.graphifyignore` files up to the nearest VCS root, so without them the root's `libfprint-CS9711/` rule collapses a nested scan to root-level files only. Keep the negations above the exclusion lines (last-match-wins).
