@@ -923,7 +923,7 @@ async fn seed_stock_items(db: &SqlitePool) -> Result<()> {
     let rows = parse_csv(OVERALL_STOCK_CSV);
     let now = now_string();
     for row in rows.iter().skip(1) {
-        let model = row.get(0).map(clean_cell).unwrap_or_default();
+        let model = row.first().map(clean_cell).unwrap_or_default();
         if model.is_empty() {
             continue;
         }
@@ -956,7 +956,7 @@ async fn import_legacy_employees_if_present(db: &SqlitePool, paths: &AppPaths) -
     };
 
     for row in parse_csv(&content).iter().skip(1) {
-        let id = row.get(0).map(clean_cell).unwrap_or_default();
+        let id = row.first().map(clean_cell).unwrap_or_default();
         let name = row.get(1).map(clean_cell).unwrap_or_default();
         if id.is_empty() || name.is_empty() {
             continue;
@@ -1029,7 +1029,7 @@ async fn import_legacy_clock_events_if_present(db: &SqlitePool, paths: &AppPaths
     };
 
     for row in parse_csv(&content).iter().skip(1) {
-        let timestamp = row.get(0).map(clean_cell).unwrap_or_default();
+        let timestamp = row.first().map(clean_cell).unwrap_or_default();
         let employee_id = row.get(1).map(clean_cell).unwrap_or_default();
         let action = row.get(3).map(clean_cell).unwrap_or_default();
         let source = row
@@ -1301,9 +1301,7 @@ pub fn clean_cell(value: impl AsRef<str>) -> String {
 }
 
 fn clean_series(value: String) -> String {
-    clean_cell(value)
-        .replace('\u{201c}', "")
-        .replace('\u{201d}', "")
+    clean_cell(value).replace(['\u{201c}', '\u{201d}'], "")
 }
 
 pub fn normalize_unit(unit: &str) -> String {
