@@ -50,7 +50,14 @@ FpiMatchResult fpi_print_bz3_match (FpPrint *temp,
                                     GError **error);
 
 FpiMatchResult fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
-                                      gint score_threshold, GError * *error);
+                                       gint score_threshold, GError * *error);
+
+/* Returns the highest sigfm match score of the scanned @print against all
+ * sub-prints of @template (no threshold applied).  If @best_index is not
+ * NULL, the index of the best-matching sub-print is stored there.  Returns
+ * -1 if the prints are not of type #FPI_PRINT_SIGFM. */
+int fpi_print_sigfm_best_score (FpPrint *template, FpPrint *print,
+                                gint *best_index);
 
 /* Helpers to encode metadata into user ID strings. */
 gchar * fpi_print_generate_user_id (FpPrint * print);

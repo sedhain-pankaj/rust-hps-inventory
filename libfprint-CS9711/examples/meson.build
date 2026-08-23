@@ -21,6 +21,14 @@ endforeach
 executable('employee-clock-helper',
     'employee-clock-helper.c',
     dependencies: [
+        libfprint_private_dep,
+        glib_dep,
+    ],
+)
+
+executable('fp-capture',
+    'fp-capture.c',
+    dependencies: [
         libfprint_dep,
         glib_dep,
     ],
@@ -29,6 +37,14 @@ executable('employee-clock-helper',
 executable('cpp-test',
     'cpp-test.cpp',
     dependencies: libfprint_dep,
+)
+
+executable('fp-align-tool',
+    'fp-align-tool.c',
+    dependencies: [
+        libfprint_private_dep,
+        dependency('opencv4'),
+    ],
 )
 
 if installed_tests

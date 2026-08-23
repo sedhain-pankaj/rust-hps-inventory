@@ -487,35 +487,10 @@ pub async fn authenticate_password(
 }
 
 #[tauri::command]
-pub async fn authenticate_fingerprint(
-    state: State<'_, AppState>,
-    require_admin: bool,
-) -> CommandResult<AuthResponse> {
-    let employee_id = fingerprint::identify_employee(&state.db, &state.paths, None, &state.active_helper_pids)
-        .await
-        .map_err(to_string)?;
-    let employee = employee_by_id(&state.db, &employee_id)
-        .await
-        .map_err(to_string)?
-        .ok_or_else(|| "Fingerprint matched an unknown employee.".to_string())?;
-
-    if !employee.active {
-        return Err(format!("{} is inactive.", employee.name));
-    }
-    if require_admin && !employee.is_admin {
-        return Err("This fingerprint does not have admin privilege.".to_string());
-    }
-
-    Ok(AuthResponse {
-        employee,
-        source: "fingerprint".to_string(),
-    })
-}
-
-#[tauri::command]
 pub async fn start_fingerprint_auth(
     state: State<'_, AppState>,
     require_admin: bool,
+    employee_id: Option<String>,
 ) -> CommandResult<FingerprintAuthStartResponse> {
     let job_id = state.next_auth_job_id();
     {
@@ -540,6 +515,15 @@ pub async fn start_fingerprint_auth(
     let active_pids = state.active_helper_pids.clone();
     let require_admin_clone = require_admin;
     let job_id_for_spawn = job_id.clone();
+    // Match only the relevant gallery: the specific employee when the staff
+    // modal triggered the scan, admins only for admin-gated scans.
+    let template_filter = if let Some(id) = employee_id {
+        fingerprint::TemplateFilter::Employee(id)
+    } else if require_admin {
+        fingerprint::TemplateFilter::Admins
+    } else {
+        fingerprint::TemplateFilter::All
+    };
 
     tauri::async_runtime::spawn(async move {
         let job_id_for_task = job_id_for_spawn;
@@ -567,7 +551,9 @@ pub async fn start_fingerprint_auth(
             }
         });
 
-        let result = fingerprint::identify_employee(&db, &paths, Some(progress), &active_pids).await;
+        let result =
+            fingerprint::identify_employee(&db, &paths, Some(progress), &active_pids, &template_filter)
+                .await;
 
         // Resolve employee validation outside of job lock
         let resolution = match result {

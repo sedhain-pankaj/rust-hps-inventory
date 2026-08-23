@@ -251,6 +251,7 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
                 employee_id TEXT PRIMARY KEY,
                 finger TEXT NOT NULL,
                 template BLOB NOT NULL,
+                images BLOB,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
             );
@@ -258,6 +259,23 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
         )
         .execute(db)
         .await?;
+    }
+
+    // Migrate: add the `images` column (sub-print image bundle used for the
+    // alignment hint on failed identify) to pre-existing databases.
+    let has_images_column: bool = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) > 0 FROM pragma_table_info('fingerprint_templates')
+        WHERE name = 'images'
+        "#,
+    )
+    .fetch_one(db)
+    .await
+    .unwrap_or(false);
+    if !has_images_column {
+        sqlx::query("ALTER TABLE fingerprint_templates ADD COLUMN images BLOB")
+            .execute(db)
+            .await?;
     }
 
     sqlx::query(
@@ -1171,7 +1189,8 @@ pub async fn employee_by_id(
         r#"
         SELECT e.*,
                EXISTS(SELECT 1 FROM fingerprint_templates f WHERE f.employee_id = e.id) AS has_fingerprint,
-               f.updated_at AS fingerprint_updated_at
+               f.updated_at AS fingerprint_updated_at,
+               f.finger AS template_finger
         FROM employees e
         LEFT JOIN fingerprint_templates f ON f.employee_id = e.id
         WHERE e.id = ?
@@ -1195,7 +1214,8 @@ pub async fn list_employees(
         r#"
         SELECT e.*,
                EXISTS(SELECT 1 FROM fingerprint_templates f WHERE f.employee_id = e.id) AS has_fingerprint,
-               f.updated_at AS fingerprint_updated_at
+               f.updated_at AS fingerprint_updated_at,
+               f.finger AS template_finger
         FROM employees e
         LEFT JOIN fingerprint_templates f ON f.employee_id = e.id
         WHERE (? = 1 OR e.active = 1)
@@ -1223,6 +1243,7 @@ async fn employee_from_row(
         id,
         name: row.get("name"),
         finger: row.get("finger"),
+        template_finger: row.get("template_finger"),
         active: row.get::<i64, _>("active") != 0,
         is_admin: row.get::<i64, _>("is_admin") != 0,
         has_password: row.get::<Option<String>, _>("password_hash").is_some(),

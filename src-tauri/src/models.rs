@@ -13,6 +13,7 @@ pub struct Employee {
     pub id: String,
     pub name: String,
     pub finger: String,
+    pub template_finger: Option<String>,
     pub active: bool,
     pub is_admin: bool,
     pub has_password: bool,

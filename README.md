@@ -28,3 +28,19 @@ ninja -C libfprint-CS9711/build examples/employee-clock-helper
 ```
 
 The Rust app embeds the built helper and libfprint artifact when they exist at the expected build paths.
+
+### Alignment hints
+
+Enrollment stores the 15 sub-print images as an `<employee_id>.fpimg` bundle alongside the
+`.fpdata` template (both persisted to the `images`/`template` columns of `fingerprint_templates`).
+When an identify scan fails, the helper emits:
+
+- `BEST|<employee_id>|<score>` — closest employee and max SIFT score (threshold is 40)
+- `HINT|<employee_id>|<ncc_pct>|<slide_x_mm>|<slide_y_mm>` — NCC alignment of the scanned finger
+  against the enrolled sub-prints; signed slide in mm (+x right, +y down)
+
+The auth modal shows `Match: <score>/40 for <name>` with a "shift your finger Xmm LEFT/RIGHT,
+Ymm UP/DOWN" prompt, which stays visible across auto-rescans. Templates are exported per context:
+the staff modal matches only the selected employee, admin-gated scans match only admin
+fingerprint templates. Employees enrolled before the hint feature have no `.fpimg` bundle and
+must re-enroll to get alignment hints.

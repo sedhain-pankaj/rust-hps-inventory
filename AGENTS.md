@@ -30,9 +30,9 @@ The fingerprint stack is shared via the C helper binary:
 ### Persistence
 - SQLite DB: `hps.db` (repo root)
 - Fingerprint temp/cache files: `data/fingerprints/`
-  - Enrollment writes `<employee_id>.fpdata` (single template), persists to SQLite, removes temp files.
-  - Identify exports templates from SQLite to `data/fingerprints/`, then clears cache after scan.
-- `fingerprint_templates` table: one row per `employee_id` (single template). Columns: `employee_id` (PK), `finger` (the enrolled finger), `template` (BLOB), `updated_at`.
+  - Enrollment writes `<employee_id>.fpdata` (single template) and `<employee_id>.fpimg` (bundle of the 15 sub-print images), persists both to SQLite, removes temp files.
+  - Identify exports templates (and image bundles) from SQLite to `data/fingerprints/`, then clears cache after scan.
+- `fingerprint_templates` table: one row per `employee_id` (single template). Columns: `employee_id` (PK), `finger` (the enrolled finger), `template` (BLOB), `images` (BLOB, optional `.fpimg` bundle used for alignment hints), `updated_at`.
 - Database backups: `data/backup/weekly/` and `data/backup/monthly/` (see Database Backup & Restore).
 
 ---
@@ -96,6 +96,8 @@ slated for removal in the final release.
   - `MATCH|...`
   - `NO_MATCH`
   - `ATTEMPT|N|3|waiting` (identify: which scan attempt is in progress)
+  - `BEST|<employee_id>|<score>` (identify: closest employee + max SIFT score, emitted before `NO_MATCH`)
+  - `HINT|<employee_id>|<ncc_pct>|<slide_x_mm>|<slide_y_mm>` (identify: NCC alignment of the scanned finger vs the enrolled sub-print images; signed slide, +x right / +y down; only when the employee has a `.fpimg` bundle)
 
 Only these protocol lines are consumed by Rust from helper output.
 

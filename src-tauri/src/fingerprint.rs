@@ -22,6 +22,15 @@ const BUNDLED_LIBFPRINT: &[u8] =
 
 type ActivePids = Arc<Mutex<HashSet<u32>>>;
 
+/// Which enrolled templates to export before an identify run. Scanning only
+/// the relevant gallery avoids wasted matching (and rejects are impossible).
+#[derive(Clone, Debug)]
+pub enum TemplateFilter {
+    All,
+    Admins,
+    Employee(String),
+}
+
 pub fn find_helper_binary(paths: &AppPaths) -> Option<PathBuf> {
     if let Ok(configured) = env::var(HELPER_ENV) {
         let path = PathBuf::from(configured);
@@ -96,9 +105,10 @@ pub async fn identify_employee(
     paths: &AppPaths,
     on_line: Option<Arc<dyn Fn(String) + Send + Sync>>,
     active_pids: &ActivePids,
+    filter: &TemplateFilter,
 ) -> Result<String> {
     kill_orphaned_helpers(active_pids);
-    export_templates(db, paths).await?;
+    export_templates(db, paths, filter).await?;
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
 
@@ -249,41 +259,80 @@ pub async fn enroll_employee(
         )
     })?;
 
+    // Optional sub-print image bundle (alignment hint data). Older helpers
+    // do not produce it; enrollment still succeeds without it.
+    let bundle_path = storage.join(format!("{employee_id}.fpimg"));
+    let images = fs::read(&bundle_path).ok();
+
     sqlx::query(
         r#"
-        INSERT INTO fingerprint_templates (employee_id, finger, template, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO fingerprint_templates (employee_id, finger, template, images, updated_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(employee_id) DO UPDATE SET
             finger = excluded.finger,
             template = excluded.template,
+            images = excluded.images,
             updated_at = excluded.updated_at
         "#,
     )
     .bind(employee_id)
     .bind(finger)
     .bind(template)
+    .bind(&images)
     .bind(now_string())
     .execute(db)
     .await?;
 
     let _ = fs::remove_file(template_path);
+    let _ = fs::remove_file(&bundle_path);
 
     Ok(lines)
 }
 
-async fn export_templates(db: &sqlx::SqlitePool, paths: &AppPaths) -> Result<()> {
+async fn export_templates(
+    db: &sqlx::SqlitePool,
+    paths: &AppPaths,
+    filter: &TemplateFilter,
+) -> Result<()> {
     fs::create_dir_all(&paths.fingerprint_dir).context("Could not create fingerprint storage")?;
     clear_template_cache(&paths.fingerprint_dir);
-    let rows = sqlx::query("SELECT employee_id, template FROM fingerprint_templates")
+
+    let rows: Vec<sqlx::sqlite::SqliteRow> = match filter {
+        TemplateFilter::All => sqlx::query(
+            "SELECT employee_id, template, images FROM fingerprint_templates",
+        )
         .fetch_all(db)
-        .await?;
+        .await?,
+        TemplateFilter::Admins => sqlx::query(
+            "SELECT t.employee_id, t.template, t.images \
+             FROM fingerprint_templates t \
+             JOIN employees e ON e.id = t.employee_id \
+             WHERE e.is_admin = 1",
+        )
+        .fetch_all(db)
+        .await?,
+        TemplateFilter::Employee(employee_id) => sqlx::query(
+            "SELECT employee_id, template, images FROM fingerprint_templates \
+             WHERE employee_id = ?",
+        )
+        .bind(employee_id)
+        .fetch_all(db)
+        .await?,
+    };
 
     for row in rows {
         let employee_id: String = row.get("employee_id");
         let template: Vec<u8> = row.get("template");
+        let images: Option<Vec<u8>> = row.get("images");
         let path = paths.fingerprint_dir.join(format!("{employee_id}.fpdata"));
         fs::write(&path, template)?;
         set_private_permissions(&path);
+
+        if let Some(images) = images {
+            let bundle_path = paths.fingerprint_dir.join(format!("{employee_id}.fpimg"));
+            fs::write(&bundle_path, images)?;
+            set_private_permissions(&bundle_path);
+        }
     }
 
     Ok(())
@@ -295,7 +344,11 @@ fn clear_template_cache(storage: &Path) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) == Some("fpdata") {
+        let is_cache = matches!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("fpdata") | Some("fpimg")
+        );
+        if is_cache {
             let _ = fs::remove_file(path);
         }
     }
@@ -442,6 +495,9 @@ fn is_protocol_line(line: &str) -> bool {
         "ENROLLED|",
         "MATCH|",
         "NO_MATCH",
+        "ATTEMPT|",
+        "BEST|",
+        "HINT|",
     ];
     PREFIXES.iter().any(|prefix| line.starts_with(prefix))
 }

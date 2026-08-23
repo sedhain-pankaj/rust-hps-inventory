@@ -10,17 +10,48 @@
 #include <errno.h>
 #include <glib/gstdio.h>
 #include <libfprint/fprint.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "fpi-print.h"
+
+/* Alignment hint tuning (see fp-align-tool.c for the derivation). */
+#define PX_PER_MM 19.0
+#define SEARCH_RANGE 33
+#define MIN_OVERLAP_FRAC 0.40
+#define FPIMG_MAGIC "FPIM"
+#define FPIMG_VERSION 1
+
 typedef struct
 {
-  gchar   *employee_id;
-  FpPrint *print;
+  guint  width;
+  guint  height;
+  gsize  size;
+  guchar *data;
+} CaptureImage;
+
+typedef struct
+{
+  gchar      *employee_id;
+  FpPrint    *print;
+  GPtrArray  *images; /* CaptureImage* sub-print images, or NULL */
 } PrintRecord;
 
+static void capture_image_free (CaptureImage *image);
+
 static void safe_close_device (FpDevice *device);
+
+static void
+capture_image_free (CaptureImage *image)
+{
+  if (!image)
+    return;
+
+  g_free (image->data);
+  g_free (image);
+}
 
 static void
 print_record_free (PrintRecord *record)
@@ -30,6 +61,8 @@ print_record_free (PrintRecord *record)
 
   g_clear_pointer (&record->employee_id, g_free);
   g_clear_object (&record->print);
+  if (record->images)
+    g_ptr_array_unref (record->images);
   g_free (record);
 }
 
@@ -63,6 +96,268 @@ print_path_for_employee (const char *storage_dir,
 {
   g_autofree gchar *filename = g_strdup_printf ("%s.fpdata", employee_id);
   return g_build_filename (storage_dir, filename, NULL);
+}
+
+static gchar *
+image_bundle_path_for_employee (const char *storage_dir,
+                                const char *employee_id)
+{
+  g_autofree gchar *filename = g_strdup_printf ("%s.fpimg", employee_id);
+  return g_build_filename (storage_dir, filename, NULL);
+}
+
+static void
+bundle_append_u32 (GByteArray *bundle,
+                   guint32     value)
+{
+  guint8 bytes[4] = {
+    (guint8) (value & 0xff),
+    (guint8) ((value >> 8) & 0xff),
+    (guint8) ((value >> 16) & 0xff),
+    (guint8) ((value >> 24) & 0xff),
+  };
+  g_byte_array_append (bundle, bytes, sizeof bytes);
+}
+
+static guint32
+read_u32_le (const gchar *contents,
+             gsize        offset)
+{
+  return (guint32) ((guchar *) contents)[offset] |
+         ((guint32) ((guchar *) contents)[offset + 1] << 8) |
+         ((guint32) ((guchar *) contents)[offset + 2] << 16) |
+         ((guint32) ((guchar *) contents)[offset + 3] << 24);
+}
+
+/*
+ * .fpimg bundle format (little endian):
+ *   'FPIM' | u32 version | u32 count |
+ *   per image: u32 width | u32 height | u32 nbytes | nbytes raw pixels
+ */
+static gboolean
+save_image_bundle (GPtrArray  *images,
+                   const char *path,
+                   GError    **error)
+{
+  GByteArray *bundle = g_byte_array_new ();
+  gboolean ok;
+
+  g_byte_array_append (bundle, (const guint8 *) FPIMG_MAGIC, 4);
+  bundle_append_u32 (bundle, FPIMG_VERSION);
+  bundle_append_u32 (bundle, images->len);
+
+  for (guint i = 0; i < images->len; i++)
+    {
+      CaptureImage *image = g_ptr_array_index (images, i);
+      bundle_append_u32 (bundle, image->width);
+      bundle_append_u32 (bundle, image->height);
+      bundle_append_u32 (bundle, image->size);
+      g_byte_array_append (bundle, image->data, image->size);
+    }
+
+  ok = g_file_set_contents (path, (const gchar *) bundle->data, bundle->len, error);
+  g_byte_array_unref (bundle);
+
+  if (ok && g_chmod (path, 0600) != 0)
+    g_warning ("Could not chmod %s: %s", path, g_strerror (errno));
+
+  return ok;
+}
+
+static GPtrArray *
+load_image_bundle (const char *path)
+{
+  GPtrArray *images = g_ptr_array_new_with_free_func ((GDestroyNotify) capture_image_free);
+  g_autofree gchar *contents = NULL;
+  gsize length = 0;
+  guint32 version;
+  guint32 count;
+  gsize offset = 12;
+
+  if (!g_file_get_contents (path, &contents, &length, NULL))
+    return images;
+  if (length < 12 || memcmp (contents, FPIMG_MAGIC, 4) != 0)
+    return images;
+
+  version = read_u32_le (contents, 4);
+  count = read_u32_le (contents, 8);
+  if (version != FPIMG_VERSION)
+    return images;
+
+  for (guint32 i = 0; i < count; i++)
+    {
+      guint32 width;
+      guint32 height;
+      guint32 size;
+      CaptureImage *image;
+
+      if (offset + 12 > length)
+        break;
+      width = read_u32_le (contents, offset);
+      height = read_u32_le (contents, offset + 4);
+      size = read_u32_le (contents, offset + 8);
+      offset += 12;
+
+      if (width == 0 || height == 0 || size == 0 ||
+          (guint64) width * height != size || offset + size > length)
+        break;
+
+      image = g_new0 (CaptureImage, 1);
+      image->width = width;
+      image->height = height;
+      image->size = size;
+      image->data = g_memdup2 (contents + offset, size);
+      g_ptr_array_add (images, image);
+      offset += size;
+    }
+
+  return images;
+}
+
+typedef struct
+{
+  double ncc;
+  int dx, dy;
+  int overlap;
+} AlignResult;
+
+/*
+ * NCC between test and (sub shifted by (dx,dy)) over their overlap.
+ * sub_sh(x,y) = sub(x-dx, y-dy); valid where 0 <= x-dx < w.
+ * (dx,dy) is the finger's displacement relative to the enrolled position.
+ */
+static double
+ncc_at (const guchar *test, const guchar *sub,
+        int w, int h, int dx, int dy, int *overlap_out)
+{
+  int x0 = dx > 0 ? dx : 0;
+  int x1 = dx > 0 ? w : w + dx;
+  int y0 = dy > 0 ? dy : 0;
+  int y1 = dy > 0 ? h : h + dy;
+
+  if (x1 <= x0 || y1 <= y0)
+    return 0.0;
+
+  int n = (x1 - x0) * (y1 - y0);
+  double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+
+  for (int y = y0; y < y1; y++)
+    for (int x = x0; x < x1; x++)
+      {
+        double a = test[y * w + x];
+        double b = sub[(y - dy) * w + (x - dx)];
+        sx += a;
+        sy += b;
+        sxx += a * a;
+        syy += b * b;
+        sxy += a * b;
+      }
+
+  double cov = sxy - sx * sy / n;
+  double va = sxx - sx * sx / n;
+  double vb = syy - sy * sy / n;
+  if (va <= 0 || vb <= 0)
+    return 0.0;
+
+  if (overlap_out)
+    *overlap_out = n;
+  return cov / sqrt (va * vb);
+}
+
+static AlignResult
+ncc_align (const guchar *test, const guchar *sub,
+           int w, int h, int range)
+{
+  AlignResult best = { -2.0, 0, 0, 0 };
+  int min_overlap = (int) (MIN_OVERLAP_FRAC * w * h);
+
+  for (int dy = -range; dy <= range; dy++)
+    for (int dx = -range; dx <= range; dx++)
+      {
+        int overlap = 0;
+        double ncc = ncc_at (test, sub, w, h, dx, dy, &overlap);
+        if (overlap < min_overlap)
+          continue;
+        if (ncc > best.ncc)
+          {
+            best.ncc = ncc;
+            best.dx = dx;
+            best.dy = dy;
+            best.overlap = overlap;
+          }
+      }
+
+  if (best.ncc < 0)
+    best.ncc = 0;
+  return best;
+}
+
+/*
+ * On NO_MATCH, report which enrolled employee came closest and (when that
+ * employee has sub-print images) where the scanned finger sits relative to
+ * the enrolled position:
+ *   BEST|<employee_id>|<score>
+ *   HINT|<employee_id>|<ncc_pct>|<slide_x_mm>|<slide_y_mm>
+ * Slide values are signed: +x = slide right, +y = slide down.
+ */
+static void
+report_no_match_hint (GPtrArray *records,
+                      FpPrint   *scanned_print)
+{
+  int best_score = -1;
+  PrintRecord *best_record = NULL;
+
+  if (!scanned_print)
+    return;
+
+  for (guint i = 0; i < records->len; i++)
+    {
+      PrintRecord *record = g_ptr_array_index (records, i);
+      int score = fpi_print_sigfm_best_score (record->print, scanned_print, NULL);
+      if (score > best_score)
+        {
+          best_score = score;
+          best_record = record;
+        }
+    }
+
+  if (!best_record || best_score < 0)
+    return;
+
+  g_print ("BEST|%s|%d\n", best_record->employee_id, best_score);
+  fflush (stdout);
+
+  FpImage *scanned_image = fp_print_get_image (scanned_print);
+  if (!scanned_image || !best_record->images || !best_record->images->len)
+    return;
+
+  gsize size = 0;
+  const guchar *data = fp_image_get_data (scanned_image, &size);
+  int w = fp_image_get_width (scanned_image);
+  int h = fp_image_get_height (scanned_image);
+  if (!data || size != (gsize) w * h)
+    return;
+
+  AlignResult best = { -2.0, 0, 0, 0 };
+  for (guint i = 0; i < best_record->images->len; i++)
+    {
+      CaptureImage *image = g_ptr_array_index (best_record->images, i);
+      if ((int) image->width != w || (int) image->height != h)
+        continue;
+      AlignResult result = ncc_align (data, image->data, w, h, SEARCH_RANGE);
+      if (result.ncc > best.ncc)
+        best = result;
+    }
+
+  if (best.ncc < 0)
+    return;
+
+  int pct = (int) (best.ncc * 100.0);
+  double slide_x = -best.dx / PX_PER_MM;
+  double slide_y = -best.dy / PX_PER_MM;
+  g_print ("HINT|%s|%d|%.1f|%.1f\n",
+           best_record->employee_id, pct, slide_x, slide_y);
+  fflush (stdout);
 }
 
 static FpFinger
@@ -154,6 +449,28 @@ enroll_progress_cb (FpDevice *device,
 
   g_print ("PROGRESS|%d|%d\n", completed_stages, fp_device_get_nr_enroll_stages (device));
   fflush (stdout);
+
+  /* user_data: GPtrArray of CaptureImage* collecting each sub-print's raw
+   * image for the alignment-hint bundle (.fpimg). */
+  GPtrArray *images = user_data;
+  FpImage *image = print ? fp_print_get_image (print) : NULL;
+  if (images && image)
+    {
+      gsize size = 0;
+      const guchar *data = fp_image_get_data (image, &size);
+      guint width = fp_image_get_width (image);
+      guint height = fp_image_get_height (image);
+
+      if (data && size == (gsize) width * height)
+        {
+          CaptureImage *capture = g_new0 (CaptureImage, 1);
+          capture->width = width;
+          capture->height = height;
+          capture->size = size;
+          capture->data = g_memdup2 (data, size);
+          g_ptr_array_add (images, capture);
+        }
+    }
 }
 
 static gboolean
@@ -184,7 +501,9 @@ enroll_employee (const char *storage_dir,
   g_autoptr(FpContext) context = NULL;
   g_autoptr(GError) error = NULL;
   g_autoptr(FpPrint) enrolled_print = NULL;
+  g_autoptr(GPtrArray) images = NULL;
   g_autofree gchar *path = NULL;
+  g_autofree gchar *bundle_path = NULL;
   FpDevice *device;
   FpPrint *template_print;
   FpFinger finger;
@@ -233,7 +552,8 @@ enroll_employee (const char *storage_dir,
   fp_print_set_description (template_print, employee_id);
   set_enroll_date (template_print);
 
-  enrolled_print = fp_device_enroll_sync (device, template_print, NULL, enroll_progress_cb, NULL, &error);
+  images = g_ptr_array_new_with_free_func ((GDestroyNotify) capture_image_free);
+  enrolled_print = fp_device_enroll_sync (device, template_print, NULL, enroll_progress_cb, images, &error);
   if (!enrolled_print)
     {
       print_line ("ERROR", error ? error->message : "Enrollment failed.");
@@ -251,6 +571,13 @@ enroll_employee (const char *storage_dir,
       print_line ("ERROR", error->message);
       safe_close_device (device);
       return 1;
+    }
+
+  if (images->len)
+    {
+      bundle_path = image_bundle_path_for_employee (storage_dir, employee_id);
+      if (!save_image_bundle (images, bundle_path, &error))
+        g_warning ("Could not save image bundle %s: %s", bundle_path, error->message);
     }
 
   safe_close_device (device);
@@ -306,6 +633,10 @@ load_print_file (const char *storage_dir,
   record = g_new0 (PrintRecord, 1);
   record->employee_id = g_steal_pointer (&employee_id);
   record->print = print;
+
+  g_autofree gchar *bundle_path = image_bundle_path_for_employee (storage_dir, record->employee_id);
+  record->images = load_image_bundle (bundle_path);
+
   g_ptr_array_add (records, record);
   return TRUE;
 }
@@ -468,6 +799,7 @@ identify_employee (const char *storage_dir)
     }
   else
     {
+      report_no_match_hint (records, scanned_print);
       g_print ("NO_MATCH\n");
     }
 

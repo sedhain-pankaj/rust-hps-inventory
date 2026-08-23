@@ -36,7 +36,6 @@ pub fn run() {
             list_staff,
             save_employee,
             authenticate_password,
-            authenticate_fingerprint,
             start_fingerprint_auth,
             poll_fingerprint_auth,
             cancel_fingerprint_auth,

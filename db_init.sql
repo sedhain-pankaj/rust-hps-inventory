@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS fingerprint_templates (
     employee_id TEXT PRIMARY KEY,
     finger TEXT NOT NULL,
     template BLOB NOT NULL,
+    images BLOB,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
 );

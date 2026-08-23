@@ -986,33 +986,13 @@ a.about-dev-value:hover {
   margin-bottom: 18px;
 }
 
-.log-box {
-  max-height: 180px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-s);
-  margin: 12px 0 18px;
-  padding: 12px;
-  background: var(--bg-inset);
-  color: var(--text-2);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 0.92rem;
-}
-
-.enroll-log {
-  max-height: 280px;
-  margin: 0 0 18px;
-  padding: 18px 20px;
-  line-height: 1.8;
-  font-size: 0.95rem;
-}
-
 .enroll-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   justify-content: flex-start;
+  margin-bottom: 18px;
 }
 
 .password-match {
@@ -1207,11 +1187,6 @@ a.about-dev-value:hover {
   color: var(--err);
 }
 
-.cancel-text {
-  color: var(--err);
-  font-weight: 600;
-}
-
 /* ---------- Auth fingerprint ---------- */
 
 .auth-fp-icon {
@@ -1253,6 +1228,31 @@ a.about-dev-value:hover {
 
 .auth-fp-icon.scanning img {
   animation: fp-glow 1.5s ease-in-out infinite;
+}
+
+.enroll-prompt {
+  margin: 4px 0 10px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-1);
+  min-height: 1.4em;
+}
+
+.enroll-progress {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-3, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.enroll-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: var(--brass);
+  transition: width 0.4s ease;
 }
 
 /* ---------- Misc ---------- */

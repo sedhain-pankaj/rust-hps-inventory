@@ -313,6 +313,50 @@ fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
 }
 
 /**
+ * fpi_print_sigfm_best_score:
+ * @template: A #FpPrint containing one or more prints
+ * @print: A newly scanned #FpPrint to test (containing exactly one print)
+ * @best_index: (allow-none): return location for the index of the best
+ *   matching sub-print of @template
+ *
+ * Returns: The highest sigfm match score of @print against all sub-prints of
+ * @template, or -1 if either print is not of type #FPI_PRINT_SIGFM.
+ */
+int
+fpi_print_sigfm_best_score (FpPrint *template, FpPrint *print,
+                            gint *best_index)
+{
+  int best = -1;
+  int best_i = -1;
+
+  if (best_index)
+    *best_index = -1;
+
+  if (template->type != FPI_PRINT_SIGFM || print->type != FPI_PRINT_SIGFM)
+    return -1;
+  if (print->prints->len != 1)
+    return -1;
+
+  SigfmImgInfo *against = g_ptr_array_index (print->prints, 0);
+  for (int i = 0; i != template->prints->len; ++i)
+    {
+      SigfmImgInfo *pinfo = g_ptr_array_index (template->prints, i);
+      int score = sigfm_match_score (pinfo, against);
+      if (score < 0)
+        continue;
+      fp_dbg ("sigfm best-score probe %d (i=%d)", score, i);
+      if (score > best)
+        {
+          best = score;
+          best_i = i;
+        }
+    }
+  if (best_index)
+    *best_index = best_i;
+  return best;
+}
+
+/**
  * fpi_print_generate_user_id:
  * @print: #FpPrint to generate the ID for
  *

@@ -6,7 +6,13 @@ import {
   todayIso,
   weekStartIso,
 } from "./api.js";
-import { alertModal, confirmModal, promptModal, requestAuth } from "./auth.js";
+import {
+  alertModal,
+  confirmModal,
+  promptModal,
+  requestAuth,
+  requestEnroll,
+} from "./auth.js";
 import { icon } from "./icons.js";
 import { createTableStore, mountInlineTable } from "./table.js";
 import { mountRatesCardGrid, openRateAddModal } from "./rates-cards.js";
@@ -23,7 +29,6 @@ const state = {
   adminView: "alerts",
   adminDbTable: "employees",
   selectedDbRow: null,
-  enrollmentLog: [],
   staffView: null,
   staffTabs: [],
   selectedEmployee: null,
@@ -548,7 +553,6 @@ function renderEmployeeForm(employees) {
 async function renderEnrollPanel() {
   const employees = await invoke("list_staff", { includeInactive: true });
   const selected = state.selectedEmployee || emptyEmployee();
-  const log = state.enrollmentLog || [];
   setPanel(
     "Fingerprint Enrollment",
     `<button class="ghost" data-refresh>Refresh</button>`,
@@ -578,15 +582,6 @@ async function renderEnrollPanel() {
           <button class="warning" type="submit">Enroll / Replace Fingerprint</button>
         </div>
       </form>
-      <h3>Enrollment Log</h3>
-      <div class="log-box enroll-log" data-enrollment-log>
-        ${
-          log.length
-            ? log.map((line) => `<div>${escapeHtml(formatFingerprintLine(line))}</div>`).join("")
-            : `<div>Ready to enroll.</div>`
-        }
-      </div>
-      <div id="enroll-scan-status" class="scan-status" style="display:none"></div>
       ${table(
         ["Name", "ID", "Admin", "Password", "Fingerprint", "Template Finger", "Last Updated"],
         employees.map((employee) => ({
@@ -597,7 +592,7 @@ async function renderEnrollPanel() {
             employee.is_admin ? "Yes" : "No",
             employee.has_password ? "Set" : "No",
             employee.has_fingerprint ? "Enrolled" : "No",
-            employee.finger,
+            employee.template_finger || "—",
             formatTimestamp(employee.fingerprint_updated_at),
           ],
         })),
@@ -619,97 +614,17 @@ async function renderEnrollPanel() {
       await alertModal({ title: "Fingerprint Enrollment", message: "Select the finger to enroll." });
       return;
     }
+    const employee = employees.find((entry) => entry.id === employeeId);
+    if (!employee) return;
     setBusy(button);
-    state.enrollmentLog = ["Starting enrollment. Follow the reader prompts."];
-    state.activeEnrollJobId = null;
-    state.enrollmentDone = false;
-    renderEnrollmentLog();
     try {
-      const start = await invoke("start_fingerprint_enroll", {
-        employeeId,
-        finger,
-      });
-      state.activeEnrollJobId = start.job_id;
-      // Show Cancel button inline — no re-render to avoid re-binding submit handler
-      const cancelEl = document.createElement("button");
-      cancelEl.type = "button";
-      cancelEl.className = "ghost cancel-text";
-      cancelEl.setAttribute("data-cancel-enroll", "");
-      cancelEl.textContent = "Cancel";
-      const jobIdForCancel = start.job_id;
-      cancelEl.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        await invoke("cancel_fingerprint_enroll", { jobId: jobIdForCancel });
-        state.enrollmentDone = true;
-        renderEnrollPanel();
-      });
-      button.disabled = true;
-      button.textContent = "Enrolling...";
-      button.parentNode.insertBefore(cancelEl, button.nextSibling);
-      const scanStatus = document.getElementById("enroll-scan-status");
-      let enrollAttempts = 0;
-      let lastQuality = null;
-      if (scanStatus) {
-        scanStatus.style.display = "";
-        scanStatus.className = "scan-status info";
-        scanStatus.textContent = "Place your finger on the scanner...";
-      }
-      let nextIndex = 0;
-      while (true) {
-        await wait(250);
-        const status = await invoke("poll_fingerprint_enroll", {
-          jobId: start.job_id,
-          fromIndex: nextIndex,
-        });
-        nextIndex = status.next_index ?? nextIndex;
-        if (Array.isArray(status.lines) && status.lines.length) {
-          state.enrollmentLog.push(...status.lines);
-          renderEnrollmentLog();
-          for (const line of status.lines) {
-            const raw = fingerprintEventLine(line);
-            if (raw.startsWith("RETRY|")) {
-              enrollAttempts++;
-              lastQuality = "retry";
-              const reason = raw.split("|").slice(1).join("|");
-              if (scanStatus) {
-                scanStatus.className = "scan-status warn";
-                scanStatus.textContent = `Attempt ${enrollAttempts}: ${mapRetryReason(reason)}`;
-              }
-            } else if (raw.startsWith("PROGRESS|")) {
-              lastQuality = "good";
-              const [, completed, total] = raw.split("|");
-              if (scanStatus) {
-                scanStatus.className = "scan-status ok";
-                scanStatus.textContent = `✓ Good scan — stage ${completed}/${total} captured`;
-              }
-            } else if (raw.startsWith("READY|")) {
-              if (scanStatus && !lastQuality) {
-                scanStatus.className = "scan-status info";
-                scanStatus.textContent = "Scanner ready — place your finger now";
-              }
-            }
-          }
-        }
-        if (status.state === "done") {
-          state.selectedEmployee = status.employee || state.selectedEmployee;
-          state.enrollmentDone = true;
-          if (scanStatus) scanStatus.style.display = "none";
-          break;
-        }
-        if (status.state === "failed") {
-          state.enrollmentDone = true;
-          if (scanStatus) scanStatus.style.display = "none";
-          throw new Error(status.error || "Enrollment failed.");
-        }
-      }
-      if (state.adminView === "enroll") renderEnrollPanel();
-    } catch (error) {
-      state.enrollmentLog = [String(error.message || error)];
-      renderEnrollmentLog();
-      if (state.adminView === "enroll") renderEnrollPanel();
+      await requestEnroll({ employee, finger });
+      state.selectedEmployee = employee;
+    } catch {
+      // Cancelled or failed — the modal already showed the reason.
     } finally {
       setBusy(button, false);
+      if (state.adminView === "enroll") renderEnrollPanel();
     }
   });
 }
@@ -2460,80 +2375,6 @@ function formatTimestamp(value) {
     minute: "2-digit",
     hour12: false,
   });
-}
-
-function formatFingerprintLine(line) {
-  line = fingerprintEventLine(line);
-  if (!line) return "";
-  if (line.startsWith("PROGRESS|")) {
-    const [, completed, total] = line.split("|");
-    return `✓ Enrollment stage ${completed} of ${total}`;
-  }
-  if (line.startsWith("ENROLL_STAGES|")) {
-    return `Reader requires ${line.split("|")[1]} enrollment stages`;
-  }
-  if (line.startsWith("DEVICE|")) {
-    const [, name, driver, id] = line.split("|");
-    return `Reader: ${name} (${driver}, ${id})`;
-  }
-  if (line.startsWith("READY|")) return `Ready for ${line.split("|")[1]}`;
-  if (line.startsWith("RETRY|")) {
-    const reason = line.split("|").slice(1).join("|");
-    return mapRetryReason(reason);
-  }
-  if (line.startsWith("ENROLLED|")) return "Enrollment completed and stored in SQLite";
-  const lower = line.toLowerCase();
-  if (lower.includes("place") && lower.includes("finger")) {
-    return "Place your finger on the scanner.";
-  }
-  if (lower.includes("remove") && lower.includes("finger")) {
-    return "Lift your finger, then place it again.";
-  }
-  return line;
-}
-
-function mapRetryReason(reason) {
-  const lower = reason.toLowerCase();
-  if (lower.includes("center") || lower.includes("not centered"))
-    return "⚠ Finger not centered — reposition and try again";
-  if (lower.includes("remove") || lower.includes("lift"))
-    return "⚠ Lift finger, wait for prompt, then place again";
-  if (lower.includes("short") || lower.includes("too short"))
-    return "⚠ Scan too short — keep finger steady longer";
-  if (lower.includes("fast") || lower.includes("too fast"))
-    return "⚠ Scan too fast — slow down and hold steady";
-  if (lower.includes("minutiae"))
-    return "⚠ Could not detect fingerprint details — try with clean, dry finger";
-  if (lower.includes("quality") || lower.includes("poor"))
-    return "⚠ Poor scan quality — adjust pressure and angle";
-  if (lower.includes("try again"))
-    return "⚠ Scan unclear — reposition finger and try again";
-  return `⚠ Retry: ${reason}`;
-}
-
-function fingerprintEventLine(payload) {
-  if (typeof payload === "string") return payload.trim();
-  if (payload === null || payload === undefined) return "";
-  if (typeof payload === "object") {
-    if (typeof payload.line === "string") return payload.line.trim();
-    if (typeof payload.message === "string") return payload.message.trim();
-    if (typeof payload.payload === "string") return payload.payload.trim();
-  }
-  return String(payload).trim();
-}
-
-function renderEnrollmentLog() {
-  const logBox = app.querySelector("[data-enrollment-log]");
-  if (!logBox) return;
-  const log = state.enrollmentLog || [];
-  logBox.innerHTML = log.length
-    ? log.map((line) => `<div>${escapeHtml(formatFingerprintLine(line))}</div>`).join("")
-    : `<div>Ready to enroll.</div>`;
-  logBox.scrollTop = logBox.scrollHeight;
-}
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function emptyDbValues(columns) {
