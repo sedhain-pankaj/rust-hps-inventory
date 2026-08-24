@@ -1,5 +1,5 @@
 import { escapeHtml, invoke } from "../api.js";
-import { app, state, setPanel, table, getWeekStartForDate } from "../core.js";
+import { app, state, setPanel, table } from "../core.js";
 
 // ==================== Admin: Dispatch Orders Panel ====================
 
