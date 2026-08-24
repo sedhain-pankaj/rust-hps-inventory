@@ -2402,7 +2402,8 @@ pub async fn search_cornice_rates(
         let model: String = row.get("model");
         let model_lower = model.to_ascii_lowercase();
 
-        // Scoring: exact match, starts_with, contains, levenshtein-like
+        // Scoring: exact match, prefix, substring, then typo-tolerant
+        // Levenshtein distance (allows up to max(1, len/3) edits).
         let score = if query.is_empty() {
             1
         } else if model_lower == query {
@@ -2412,10 +2413,10 @@ pub async fn search_cornice_rates(
         } else if model_lower.contains(&query) {
             200
         } else {
-            // Character-level similarity score
-            let common: usize = query.chars().filter(|c| model_lower.contains(*c)).count();
-            if common >= query.len().saturating_sub(1) && common > 0 {
-                common as u32 * 10
+            let distance = levenshtein(&model_lower, &query);
+            let max_distance = (query.len() / 3).max(1);
+            if distance <= max_distance {
+                (150 - (distance as u32) * 40).max(10)
             } else {
                 0
             }
@@ -3684,6 +3685,29 @@ fn to_string(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+/// Classic Levenshtein edit distance (insertions, deletions, substitutions).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
 fn disk_usage(path: &std::path::Path) -> Option<(u64, u64, f64)> {
     let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
     let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
@@ -3778,6 +3802,22 @@ mod storage_tests {
         assert!(total > 0);
         assert!(free <= total);
         assert!((0.0..=100.0).contains(&pct));
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn levenshtein_basics() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("491", "491"), 0);
+        assert_eq!(levenshtein("491", "49"), 1);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("404", "440"), 2);
     }
 }
 

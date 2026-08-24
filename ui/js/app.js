@@ -16,6 +16,7 @@ import {
 import { icon } from "./icons.js";
 import { createTableStore, mountInlineTable } from "./table.js";
 import { mountRatesCardGrid, openRateAddModal } from "./rates-cards.js";
+import { mountSearchBox, matchesQuery } from "./search.js";
 
 const app = document.getElementById("app");
 
@@ -35,6 +36,11 @@ const state = {
   employeeFormMode: null,
   stockFilter: "all",
   corniceRateMatches: [],
+  corniceRateAll: [],
+  ratesFilter: "",
+  mouldFilter: "",
+  staffRatesFilter: "",
+  staffMouldFilter: "",
   // Session management
   sessionUser: null,
   sessionRole: null,
@@ -729,18 +735,32 @@ let ratesStore = null;
 
 async function renderRatesPanel() {
   const rates = await invoke("list_cornice_rates");
+  const filter = state.ratesFilter || "";
+  const visible = filter ? rates.filter((rate) => matchesQuery(rate.model, filter)) : rates;
   const groups = {};
-  for (const rate of rates) {
+  for (const rate of visible) {
     const series = rate.series || "(no series)";
     (groups[series] ||= []).push(rate);
   }
   const seriesNames = Object.keys(groups).sort();
-  const displaySeriesNames = seriesNames.length ? seriesNames : ["New series"];
+  const displaySeriesNames = seriesNames.length
+    ? seriesNames
+    : rates.length
+      ? []
+      : ["New series"];
   setPanel(
     "Cornice Rates",
     "",
     `
-      <div class="rate-series-layout">
+      <div data-rates-search></div>
+      ${
+        filter
+          ? `<div class="message" style="margin-bottom:12px">${visible.length} of ${rates.length} rates match "${escapeHtml(filter)}"</div>`
+          : ""
+      }
+      ${
+        displaySeriesNames.length
+          ? `<div class="rate-series-layout">
       ${displaySeriesNames
         .map(
           (series) => `
@@ -753,7 +773,9 @@ async function renderRatesPanel() {
         </section>`,
         )
         .join("")}
-      </div>
+      </div>`
+          : `<div class="empty">No rates match "${escapeHtml(filter)}".</div>`
+      }
     `,
   );
 
@@ -798,6 +820,24 @@ async function renderRatesPanel() {
     });
   });
   ensureRateMenuListener();
+
+  const searchBox = mountSearchBox(app.querySelector("[data-rates-search]"), {
+    placeholder: "Search by cornice name…",
+    minChars: 1,
+    searchFn: (query) => rates.filter((rate) => matchesQuery(rate.model, query)),
+    renderMatch: (rate) =>
+      `${escapeHtml(rate.series ? `${rate.series} · ` : "")}${escapeHtml(rate.model)}<span class="search-result-meta">${escapeHtml(rate.unit || "Custom")}</span>`,
+    onQuery: (query) => {
+      if (query === (state.ratesFilter || "")) return;
+      state.ratesFilter = query;
+      renderRatesPanel();
+    },
+    onSelect: (rate) => {
+      state.ratesFilter = rate.model;
+      renderRatesPanel();
+    },
+  });
+  if (filter) searchBox.setQuery(filter, { trigger: false });
 }
 
 let rateMenuListenerAdded = false;
@@ -1315,24 +1355,43 @@ async function renderMouldLocationsPanel() {
     invoke("list_mould_inventory"),
   ]);
   const columnsFor = (locationId) => columns.filter((col) => col.location_id === locationId);
+  const filter = state.mouldFilter || "";
+  const visibleItems = filter ? items.filter((item) => matchesQuery(item.mould_name, filter)) : items;
+  const locationLabel = (item) => {
+    if (item.column_id != null) {
+      const col = columns.find((c) => c.id === item.column_id);
+      const loc = locations.find((l) => l.id === col?.location_id);
+      return loc && col ? `${loc.name} · ${col.name}` : "Unassigned";
+    }
+    return item.storage_location || "Unassigned";
+  };
 
   const boxes = locations
     .map((loc) => {
-      const locItems = mouldsInLocation(loc, columns, items);
+      const locItems = mouldsInLocation(loc, columns, visibleItems);
       const locCols = columnsFor(loc.id);
       const lastColId = locCols.length ? locCols[locCols.length - 1].id : null;
-      const colCards = locCols
+       const colCards = locCols
         .map((col) => {
-          const colItems = items.filter((item) => item.column_id === col.id);
+          const colItems = visibleItems.filter((item) => item.column_id === col.id);
+          const actualCount = items.filter((item) => item.column_id === col.id).length;
+          const isLast = col.id === lastColId;
+          const isOnly = locCols.length === 1;
+          const delTitle = isOnly
+            ? "A location must keep at least one column"
+            : isLast
+              ? actualCount
+                ? `Delete column (moves ${actualCount} mould(s) to Unassigned)`
+                : "Delete column"
+              : "Only the last column can be deleted (delete from the end)";
+          const delBtn = isOnly
+            ? ""
+            : `<button class="icon ghost" data-del-col="${col.id}" title="${escapeHtml(delTitle)}"${isLast ? "" : " disabled"}>${icon("trash", 14)}</button>`;
           return `
             <div class="mould-column-card">
               <h4>
                 <span>${escapeHtml(col.name)}</span>
-                ${
-                  col.id === lastColId
-                    ? `<button class="icon ghost" data-del-col="${col.id}" title="Delete column (last column only, must be empty)">${icon("trash", 14)}</button>`
-                    : ""
-                }
+                ${delBtn}
               </h4>
               <div class="mould-slots">
                 ${colItems
@@ -1398,8 +1457,38 @@ async function renderMouldLocationsPanel() {
     "Mould Locations",
     `<button class="ghost" data-edit-locs>${icon("edit", 18)} Edit Location</button>
      <button class="ghost" data-refresh>${icon("refresh", 18)} Refresh</button>`,
-    `<div class="location-series-layout">${boxes}${unassigned}</div>` || `<div class="empty">No moulds registered.</div>`,
+    `
+      <div data-mould-search></div>
+      ${
+        filter
+          ? `<div class="message" style="margin-bottom:12px">${visibleItems.length} of ${items.length} moulds match "${escapeHtml(filter)}"</div>`
+          : ""
+      }
+      ${
+        filter && !visibleItems.length
+          ? `<div class="empty">No moulds match "${escapeHtml(filter)}".</div>`
+          : `<div class="location-series-layout">${boxes}${unassigned}</div>`
+      }
+    `,
   );
+
+  const mouldSearchBox = mountSearchBox(app.querySelector("[data-mould-search]"), {
+    placeholder: "Search by mould name…",
+    minChars: 1,
+    searchFn: (query) => items.filter((item) => matchesQuery(item.mould_name, query)),
+    renderMatch: (item) =>
+      `${escapeHtml(item.mould_name)}<span class="search-result-meta">${escapeHtml(locationLabel(item))}</span>`,
+    onQuery: (query) => {
+      if (query === (state.mouldFilter || "")) return;
+      state.mouldFilter = query;
+      renderMouldLocationsPanel();
+    },
+    onSelect: (item) => {
+      state.mouldFilter = item.mould_name;
+      renderMouldLocationsPanel();
+    },
+  });
+  if (filter) mouldSearchBox.setQuery(filter, { trigger: false });
 
   app.querySelector("[data-refresh]").addEventListener("click", renderMouldLocationsPanel);
   app.querySelector("[data-edit-locs]").addEventListener("click", async () => {
@@ -1871,45 +1960,31 @@ async function renderStaffClock(message = "") {
 }
 
 let staffLogStore = null;
-let corniceModelSearchTimer = null;
 
-function bindCorniceModelSearch() {
-  const panelBody = app.querySelector("[data-panel-body]");
-  if (!panelBody || panelBody.dataset.corniceSearchBound) return;
-  panelBody.dataset.corniceSearchBound = "1";
-  panelBody.addEventListener("input", (event) => {
-    const input = event.target;
-    if (!input.matches('input[data-key="model"]') || state.staffView !== "cornice") return;
-    const query = input.value.trim();
-    clearTimeout(corniceModelSearchTimer);
-    if (query.length < 2) {
-      app.querySelector("#cornice-search-results")?.style.setProperty("display", "none");
-      return;
-    }
-    corniceModelSearchTimer = setTimeout(async () => {
-      try {
-        const resp = await invoke("search_cornice_rates", { request: { query } });
-        state.corniceRateMatches = resp.matches || [];
-        const box = app.querySelector("#cornice-search-results");
-        if (!box) return;
-        box.innerHTML = (resp.matches || []).length
-          ? `<label class="search-match-label">${resp.matches.length} match(es)<select data-rate-match><option value="">Pick a rate...</option>${resp.matches
-              .map((match, index) => `<option value="${index}">${escapeHtml(match.series ? `${match.series} · ` : "")}${escapeHtml(match.model)} · ${escapeHtml(match.unit || "Custom")}</option>`)
-              .join("")}</select></label>`
-          : "No match found — will be logged as unknown/custom.";
-        box.querySelector("[data-rate-match]")?.addEventListener("change", (event) => {
-          const match = state.corniceRateMatches[Number(event.currentTarget.value)];
-          const modelInput = app.querySelector('input[data-key="model"]:focus') || app.querySelector('input[data-key="model"]');
-          if (!match || !modelInput) return;
-          modelInput.value = match.model;
-          modelInput.dispatchEvent(new Event("change", { bubbles: true }));
-          box.insertAdjacentHTML("beforeend", `<div class="message">${escapeHtml(match.unit || "Custom")} selected</div>`);
-        });
-        box.style.display = "block";
-      } catch {
-        /* ignore */
+function corniceRateSearchBox(onNewRow) {
+  return mountSearchBox(app.querySelector("[data-cornice-search]"), {
+    placeholder: "Search cornice model…",
+    searchFn: async (query) => {
+      const resp = await invoke("search_cornice_rates", { request: { query } });
+      state.corniceRateMatches = resp.matches || [];
+      return resp.matches || [];
+    },
+    renderMatch: (match) =>
+      `${escapeHtml(match.series ? `${match.series} · ` : "")}${escapeHtml(match.model)}<span class="search-result-meta">${escapeHtml(match.unit || "Custom")}</span>`,
+    emptyText: "No match found — will be logged as unknown/custom.",
+    onSelect: (match) => {
+      const modelInput =
+        app.querySelector('input[data-key="model"]:focus') ||
+        app.querySelector('input[data-key="model"]');
+      if (modelInput) {
+        modelInput.value = match.model;
+        modelInput.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
       }
-    }, 200);
+      // No cell being edited: start a new row with the model pre-filled so
+      // the staff member only has to enter the lengths.
+      if (onNewRow) onNewRow(match);
+    },
   });
 }
 
@@ -1961,31 +2036,24 @@ async function renderStaffCornice() {
     "Cornice Log",
     "",
     `
-      <datalist id="staff-cornice-models"></datalist>
-      <div id="cornice-search-results" class="message" style="display:none;margin-bottom:12px;font-size:0.9em;"></div>
+      <div data-cornice-search></div>
       ${body || `<div class="empty">No log entries yet.</div>`}
     `,
   );
 
   try {
     const resp = await invoke("search_cornice_rates", { request: { query: "" } });
-    state.corniceRateMatches = resp.matches || [];
-    app.querySelector("#staff-cornice-models").innerHTML = (resp.matches || [])
-      .map(
-        (match) =>
-          `<option value="${escapeHtml(match.model)}">${escapeHtml(match.series ? `${match.series} ` : "")}${escapeHtml(match.model)} (${match.unit})</option>`,
-      )
-      .join("");
+    state.corniceRateAll = resp.matches || [];
+    state.corniceRateMatches = state.corniceRateAll;
   } catch {
     /* ignore */
   }
-  bindCorniceModelSearch();
 
   if (!staffLogStore) {
     staffLogStore = createTableStore({
       commit: {
         add: (values) => {
-          const match = state.corniceRateMatches.find(
+          const match = (state.corniceRateAll || []).find(
             (item) => item.model.toLowerCase() === String(values.model).trim().toLowerCase(),
           );
           return invoke("add_cornice_log", {
@@ -2031,7 +2099,6 @@ async function renderStaffCornice() {
               label: "Model",
               type: "text",
               editable: true,
-              list: "staff-cornice-models",
               cellHtml: (log, col) => corniceLogCellHtml(log, col.key),
             },
             {
@@ -2081,6 +2148,18 @@ async function renderStaffCornice() {
         },
       );
     });
+  });
+
+  corniceRateSearchBox((match) => {
+    store.addNew(`day-${CSS.escape(today)}`, {
+      id: null,
+      series: match.series || "",
+      model: match.model,
+      lengths: 0,
+      unit: match.unit || "",
+      total_units: 0,
+    });
+    mountedDays[today]?.render();
   });
 }
 
@@ -2253,8 +2332,10 @@ async function renderDriverDispatchView() {
 
 async function renderStaffRates() {
   const rates = await invoke("list_cornice_rates");
+  const filter = state.staffRatesFilter || "";
+  const visible = filter ? rates.filter((rate) => matchesQuery(rate.model, filter)) : rates;
   const groups = {};
-  for (const rate of rates) {
+  for (const rate of visible) {
     const series = rate.series || "(no series)";
     (groups[series] ||= []).push(rate);
   }
@@ -2269,11 +2350,19 @@ async function renderStaffRates() {
         </section>`,
         )
         .join("")}</div>`
-    : `<div class="empty">No rates yet.</div>`;
+    : `<div class="empty">${filter ? `No rates match "${escapeHtml(filter)}".` : "No rates yet."}</div>`;
   setPanel(
     "Cornice Rates (Read-Only)",
     `<button class="ghost" data-refresh>Refresh</button>`,
-    body,
+    `
+      <div data-staff-rates-search></div>
+      ${
+        filter
+          ? `<div class="message" style="margin-bottom:12px">${visible.length} of ${rates.length} rates match "${escapeHtml(filter)}"</div>`
+          : ""
+      }
+      ${body}
+    `,
   );
   seriesNames.forEach((series) => {
     mountRatesCardGrid(app.querySelector(`[data-rate-group="${CSS.escape(series)}"]`), null, {
@@ -2283,6 +2372,23 @@ async function renderStaffRates() {
       editable: false,
     });
   });
+  const searchBox = mountSearchBox(app.querySelector("[data-staff-rates-search]"), {
+    placeholder: "Search by cornice name…",
+    minChars: 1,
+    searchFn: (query) => rates.filter((rate) => matchesQuery(rate.model, query)),
+    renderMatch: (rate) =>
+      `${escapeHtml(rate.series ? `${rate.series} · ` : "")}${escapeHtml(rate.model)}<span class="search-result-meta">${escapeHtml(rate.unit || "Custom")}</span>`,
+    onQuery: (query) => {
+      if (query === (state.staffRatesFilter || "")) return;
+      state.staffRatesFilter = query;
+      renderStaffRates();
+    },
+    onSelect: (rate) => {
+      state.staffRatesFilter = rate.model;
+      renderStaffRates();
+    },
+  });
+  if (filter) searchBox.setQuery(filter, { trigger: false });
   app.querySelector("[data-refresh]").addEventListener("click", renderStaffRates);
 }
 
@@ -2293,12 +2399,14 @@ async function renderStaffMouldView() {
     invoke("list_mould_inventory"),
   ]);
   const columnsFor = (locationId) => columns.filter((col) => col.location_id === locationId);
+  const filter = state.staffMouldFilter || "";
+  const visibleItems = filter ? items.filter((item) => matchesQuery(item.mould_name, filter)) : items;
   const boxes = locations
     .map((loc) => {
-      const locItems = mouldsInLocation(loc, columns, items);
+      const locItems = mouldsInLocation(loc, columns, visibleItems);
       const colCards = columnsFor(loc.id)
         .map((col) => {
-          const colItems = items.filter((item) => item.column_id === col.id);
+          const colItems = visibleItems.filter((item) => item.column_id === col.id);
           return `
             <div class="mould-column-card">
               <h4><span>${escapeHtml(col.name)}</span></h4>
@@ -2317,7 +2425,7 @@ async function renderStaffMouldView() {
         </div>`;
     })
     .join("");
-  const unmatched = items.filter((item) => item.column_id == null);
+  const unmatched = visibleItems.filter((item) => item.column_id == null);
   const unassigned = unmatched.length
     ? `<div class="day-box"><h3><span>Unassigned</span></h3>${table(
         ["Mould Name", "Location"],
@@ -2327,8 +2435,41 @@ async function renderStaffMouldView() {
   setPanel(
     "Mould Locations (Read-Only)",
     `<button class="ghost" data-refresh>Refresh</button>`,
-    `<div class="location-series-layout">${boxes}${unassigned}</div>` || `<div class="empty">No moulds registered.</div>`,
+    `
+      <div data-staff-mould-search></div>
+      ${
+        filter
+          ? `<div class="message" style="margin-bottom:12px">${visibleItems.length} of ${items.length} moulds match "${escapeHtml(filter)}"</div>`
+          : ""
+      }
+      ${
+        filter && !visibleItems.length
+          ? `<div class="empty">No moulds match "${escapeHtml(filter)}".</div>`
+          : `<div class="location-series-layout">${boxes}${unassigned}</div>`
+      }
+    `,
   );
+  const searchBox = mountSearchBox(app.querySelector("[data-staff-mould-search]"), {
+    placeholder: "Search by mould name…",
+    minChars: 1,
+    searchFn: (query) => items.filter((item) => matchesQuery(item.mould_name, query)),
+    renderMatch: (item) => {
+      const col = columns.find((c) => c.id === item.column_id);
+      const loc = locations.find((l) => l.id === col?.location_id);
+      const where = loc && col ? `${loc.name} · ${col.name}` : item.storage_location || "Unassigned";
+      return `${escapeHtml(item.mould_name)}<span class="search-result-meta">${escapeHtml(where)}</span>`;
+    },
+    onQuery: (query) => {
+      if (query === (state.staffMouldFilter || "")) return;
+      state.staffMouldFilter = query;
+      renderStaffMouldView();
+    },
+    onSelect: (item) => {
+      state.staffMouldFilter = item.mould_name;
+      renderStaffMouldView();
+    },
+  });
+  if (filter) searchBox.setQuery(filter, { trigger: false });
   app.querySelector("[data-refresh]").addEventListener("click", renderStaffMouldView);
 }
 
