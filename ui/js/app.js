@@ -49,6 +49,7 @@ const permissionLabels = {
   deliveries: "Deliveries",
   cornice_rates_view: "Cornice rates",
   daily_production_all: "All production",
+  mould_view: "Mould Locations (view)",
 };
 
 
@@ -1298,123 +1299,344 @@ async function renderPayrollPanel() {
 
 // ==================== Admin: Mould Locations Panel ====================
 
-let mouldStore = null;
+function mouldsInLocation(loc, columns, items) {
+  const locCols = columns.filter((col) => col.location_id === loc.id);
+  return items.filter(
+    (item) =>
+      (item.column_id != null && locCols.some((col) => col.id === item.column_id)) ||
+      (item.column_id == null && item.storage_location === loc.name),
+  );
+}
 
 async function renderMouldLocationsPanel() {
-  const [locations, items] = await Promise.all([
+  const [locations, columns, items] = await Promise.all([
     invoke("list_mould_locations"),
+    invoke("list_mould_location_columns"),
     invoke("list_mould_inventory"),
   ]);
-  const actionsEl = app.querySelector("[data-panel-actions]");
-  const locationColumns = [
-    { key: "mould_name", label: "Mould Name", type: "text", editable: true },
-    {
-      key: "storage_location",
-      label: "Location",
-      type: "select",
-      options: locations.map((loc) => loc.name),
-      editable: true,
-    },
-    { key: "notes", label: "Notes", type: "text", editable: true },
-  ];
+  const columnsFor = (locationId) => columns.filter((col) => col.location_id === locationId);
+
   const boxes = locations
     .map((loc) => {
-      const locItems = items.filter((item) => item.storage_location === loc.name);
+      const locItems = mouldsInLocation(loc, columns, items);
+      const locCols = columnsFor(loc.id);
+      const lastColId = locCols.length ? locCols[locCols.length - 1].id : null;
+      const colCards = locCols
+        .map((col) => {
+          const colItems = items.filter((item) => item.column_id === col.id);
+          return `
+            <div class="mould-column-card">
+              <h4>
+                <span>${escapeHtml(col.name)}</span>
+                ${
+                  col.id === lastColId
+                    ? `<button class="icon ghost" data-del-col="${col.id}" title="Delete column (last column only, must be empty)">${icon("trash", 14)}</button>`
+                    : ""
+                }
+              </h4>
+              <div class="mould-slots">
+                ${colItems
+                  .map(
+                    (item) => `
+                    <div class="mould-slot">
+                      <span>${escapeHtml(item.mould_name)}</span>
+                      <button class="icon ghost" data-del-mould="${item.id}" title="Delete mould">${icon("x", 14)}</button>
+                    </div>`,
+                  )
+                  .join("")}
+                <form class="mould-slot-form" data-add-form="${col.id}">
+                  <input name="mould_name" placeholder="Mould name" autocomplete="off" />
+                </form>
+              </div>
+            </div>`;
+        })
+        .join("");
       return `
         <div class="day-box">
           <h3>
             <span>${escapeHtml(loc.name)} <small>(${locItems.length})</small></span>
             <span style="display:flex;gap:8px">
-              <button class="ghost" data-add-mould="${escapeHtml(loc.name)}" style="min-height:36px">${icon("plus", 16)} Add</button>
-              ${loc.sort_order >= 3 ? `<button class="icon ghost" data-del-loc="${loc.id}" title="Delete location (only if empty)">${icon("x", 16)}</button>` : ""}
+              <button class="ghost" data-add-col="${loc.id}" style="min-height:36px">${icon("plus", 16)} Add Column</button>
             </span>
           </h3>
-          <div data-mould-table="${escapeHtml(loc.name)}"></div>
+          <div class="mould-columns">${colCards}</div>
         </div>`;
     })
     .join("");
-  const unmatched = items.filter((item) => !locations.some((loc) => loc.name === item.storage_location));
+  const unmatched = items.filter((item) => item.column_id == null);
   const unassigned = unmatched.length
     ? `
       <div class="day-box">
         <h3><span>Unassigned <small>(legacy locations)</small></span></h3>
-        <div data-mould-table="unassigned"></div>
+        ${unmatched
+          .map(
+            (item) => `
+            <div class="mould-unassigned-row">
+              <span>${escapeHtml(item.mould_name)} <small>(${escapeHtml(item.storage_location || "no location")})</small></span>
+              <span style="display:flex;gap:8px;align-items:center">
+                <select data-assign-col="${item.id}">
+                  <option value="">Assign to column…</option>
+                  ${locations
+                    .map(
+                      (loc) => `<optgroup label="${escapeHtml(loc.name)}">
+                        ${columnsFor(loc.id)
+                          .map((col) => `<option value="${col.id}">${escapeHtml(col.name)}</option>`)
+                          .join("")}
+                      </optgroup>`,
+                    )
+                    .join("")}
+                </select>
+                <button class="ghost" data-assign-go="${item.id}">Assign</button>
+                <button class="icon ghost" data-del-mould="${item.id}" title="Delete mould">${icon("x", 16)}</button>
+              </span>
+            </div>`,
+          )
+          .join("")}
       </div>`
     : "";
-  setPanel("Mould Locations", "", `<div class="location-series-layout">${boxes}${unassigned}</div>` || `<div class="empty">No moulds registered.</div>`);
+  setPanel(
+    "Mould Locations",
+    `<button class="ghost" data-edit-locs>${icon("edit", 18)} Edit Location</button>
+     <button class="ghost" data-refresh>${icon("refresh", 18)} Refresh</button>`,
+    `<div class="location-series-layout">${boxes}${unassigned}</div>` || `<div class="empty">No moulds registered.</div>`,
+  );
 
-  if (!mouldStore) {
-    mouldStore = createTableStore({
-      commit: {
-        add: (values) => invoke("save_mould_inventory", { input: values }),
-        save: (values) => invoke("save_mould_inventory", { input: values }),
-        remove: (id) => invoke("delete_mould_inventory", { id }),
-      },
-      onDone: () => {
-        mouldStore = null;
+  app.querySelector("[data-refresh]").addEventListener("click", renderMouldLocationsPanel);
+  app.querySelector("[data-edit-locs]").addEventListener("click", async () => {
+    await openLocationsModal(locations, columns, items);
+    renderMouldLocationsPanel();
+  });
+
+  app.querySelectorAll("[data-add-col]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const locationId = Number(button.dataset.addCol);
+      setBusy(button);
+      try {
+        // Empty name = backend auto-names it R{next}.
+        await invoke("save_mould_location_column", {
+          input: { id: null, location_id: locationId, name: "" },
+        });
         renderMouldLocationsPanel();
-      },
+      } catch (error) {
+        await alertModal({ title: "Mould Locations", message: String(error.message || error) });
+      } finally {
+        setBusy(button, false);
+      }
     });
-  }
-  const store = mouldStore;
-  store.renderActions(actionsEl, {
-    refreshFn: renderMouldLocationsPanel,
-    extraActions: `<button class="ghost" data-add-loc>${icon("plus", 18)} Add Location</button>`,
-    onRendered: (el) => {
-      el.querySelector("[data-add-loc]")?.addEventListener("click", async () => {
-        const name = await promptModal({
-          title: "Mould Locations",
-          label: "New mould location name",
-          confirmLabel: "Add",
-        }).catch(() => null);
-        if (!name || !name.trim()) return;
-        try {
-          await invoke("save_mould_location", { input: { id: null, name: name.trim() } });
-          renderMouldLocationsPanel();
-        } catch (error) {
-          await alertModal({ title: "Mould Locations", message: String(error.message || error) });
-        }
-      });
-    },
   });
-  const mountFor = (locName, locItems) =>
-    mountInlineTable(app.querySelector(`[data-mould-table="${CSS.escape(locName)}"]`), store, {
-      columns: locationColumns,
-      rows: locItems,
-      tableId: `loc-${CSS.escape(locName)}`,
-      emptyText: "No moulds in this location",
-      actionsEl,
-      refreshFn: renderMouldLocationsPanel,
-    });
-  const mounted = {};
-  locations.forEach((loc) => {
-    mounted[loc.name] = mountFor(loc.name, items.filter((item) => item.storage_location === loc.name));
-  });
-  if (unmatched.length) mounted.unassigned = mountFor("unassigned", unmatched);
 
-  locations.forEach((loc) => {
-    app.querySelector(`[data-add-mould="${CSS.escape(loc.name)}"]`).addEventListener("click", () => {
-      store.addNew(`loc-${CSS.escape(loc.name)}`, {
-        mould_name: "",
-        storage_location: loc.name,
-        notes: "",
-      });
-      mounted[loc.name].render();
-    });
-  });
-  locations.filter((loc) => loc.sort_order >= 3).forEach((loc) => {
-    app.querySelector(`[data-del-loc="${loc.id}"]`)?.addEventListener("click", async () => {
+  app.querySelectorAll("[data-del-col]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const columnId = Number(button.dataset.delCol);
+      const colName = columns.find((col) => col.id === columnId)?.name || "?";
       const confirmed = await confirmModal({
         title: "Mould Locations",
-        body: `Delete location "${loc.name}"? Only works when it has no moulds.`,
+        body: `Delete column "${colName}"? Only the last column can be deleted, and it must be empty.`,
         confirmLabel: "Delete",
       }).catch(() => false);
       if (!confirmed) return;
       try {
-        await invoke("delete_mould_location", { id: loc.id });
+        await invoke("delete_mould_location_column", { id: columnId });
         renderMouldLocationsPanel();
       } catch (error) {
         await alertModal({ title: "Mould Locations", message: String(error.message || error) });
+      }
+    });
+  });
+
+  app.querySelectorAll("[data-del-mould]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mouldId = Number(button.dataset.delMould);
+      const mouldName = items.find((item) => item.id === mouldId)?.mould_name || "?";
+      const confirmed = await confirmModal({
+        title: "Mould Locations",
+        body: `Delete mould "${mouldName}"?`,
+        confirmLabel: "Delete",
+      }).catch(() => false);
+      if (!confirmed) return;
+      try {
+        await invoke("delete_mould_inventory", { id: mouldId });
+        renderMouldLocationsPanel();
+      } catch (error) {
+        await alertModal({ title: "Mould Locations", message: String(error.message || error) });
+      }
+    });
+  });
+
+  app.querySelectorAll("[data-add-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const columnId = Number(form.dataset.addForm);
+      const name = form.querySelector("input[name='mould_name']").value.trim();
+      if (!name) return;
+      try {
+        await invoke("save_mould_inventory", {
+          input: { id: null, mould_name: name, column_id: columnId },
+        });
+        renderMouldLocationsPanel();
+      } catch (error) {
+        await alertModal({ title: "Mould Locations", message: String(error.message || error) });
+      }
+    });
+  });
+
+  app.querySelectorAll("[data-assign-go]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mouldId = Number(button.dataset.assignGo);
+      const select = app.querySelector(`[data-assign-col="${mouldId}"]`);
+      const columnId = Number(select?.value);
+      if (!columnId) {
+        await alertModal({ title: "Mould Locations", message: "Choose a column first." });
+        return;
+      }
+      const item = items.find((row) => row.id === mouldId);
+      try {
+        await invoke("save_mould_inventory", {
+          input: { id: mouldId, mould_name: item.mould_name, column_id: columnId },
+        });
+        renderMouldLocationsPanel();
+      } catch (error) {
+        await alertModal({ title: "Mould Locations", message: String(error.message || error) });
+      }
+    });
+  });
+}
+
+// Add / rename / delete locations in one modal: each location is a row (click
+// the name to rename, trash to delete), a plus row adds a new one, the save
+// icon commits everything.
+function openLocationsModal(locations, columns, items) {
+  return new Promise((resolve) => {
+    const root = document.getElementById("modal-root");
+    const countFor = (loc) => mouldsInLocation(loc, columns, items).length;
+    root.innerHTML = `
+      <div class="modal-backdrop">
+        <section class="modal" role="dialog" aria-modal="true">
+          <header>
+            <h2>Mould Locations</h2>
+            <button class="icon ghost" data-close title="Close">${icon("x")}</button>
+          </header>
+          <div class="body">
+            <div class="loc-editor">
+              ${locations
+                .map((loc) => {
+                  const count = countFor(loc);
+                  return `
+                    <div class="loc-editor-row" data-loc-row="${loc.id}">
+                      <span class="loc-name" data-loc-name="${loc.id}" title="Click to rename">${escapeHtml(loc.name)}</span>
+                      <button class="icon ghost" data-loc-del="${loc.id}" title="${count ? `${count} mould(s) stored here — delete them first` : "Delete location"}">${icon("trash", 16)}</button>
+                    </div>`;
+                })
+                .join("")}
+              <div class="loc-editor-row loc-add-row">
+                <span class="loc-add-plus">${icon("plus", 16)}</span>
+                <input data-new-loc placeholder="New location name" autocomplete="off" />
+              </div>
+            </div>
+            <div class="message" data-loc-error></div>
+          </div>
+          <footer>
+            <button class="icon primary" data-loc-save title="Save">${icon("save", 20)}</button>
+          </footer>
+        </section>
+      </div>
+    `;
+
+    const errorEl = root.querySelector("[data-loc-error]");
+    const showError = (text) => {
+      errorEl.textContent = text;
+      errorEl.classList.add("error");
+    };
+    const close = () => {
+      root.innerHTML = "";
+      resolve();
+    };
+    root.querySelector("[data-close]").addEventListener("click", close);
+
+    root.querySelectorAll("[data-loc-name]").forEach((nameEl) => {
+      nameEl.addEventListener("click", () => {
+        const row = nameEl.closest(".loc-editor-row");
+        if (row.classList.contains("loc-deleting")) return;
+        const input = document.createElement("input");
+        input.value = nameEl.textContent;
+        input.dataset.locInput = nameEl.dataset.locName;
+        input.autocomplete = "off";
+        nameEl.replaceWith(input);
+        input.focus();
+        input.select();
+      });
+    });
+
+    root.querySelectorAll("[data-loc-del]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const row = button.closest(".loc-editor-row");
+        row.classList.toggle("loc-deleting");
+        const input = row.querySelector("[data-loc-input]");
+        if (input) input.disabled = row.classList.contains("loc-deleting");
+      });
+    });
+
+    root.querySelector("[data-loc-save]").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      const deletions = [...root.querySelectorAll(".loc-editor-row.loc-deleting")].map((row) =>
+        Number(row.dataset.locRow),
+      );
+      const renames = [];
+      root.querySelectorAll("[data-loc-input]").forEach((input) => {
+        const id = Number(input.dataset.locInput);
+        if (deletions.includes(id)) return;
+        const original = locations.find((loc) => loc.id === id)?.name || "";
+        const value = input.value.trim();
+        if (value !== original) renames.push({ id, name: value });
+      });
+      const newName = root.querySelector("[data-new-loc]").value.trim();
+
+      for (const { id, name } of renames) {
+        if (!name) {
+          showError("Location name cannot be empty.");
+          return;
+        }
+      }
+      for (const id of deletions) {
+        const loc = locations.find((l) => l.id === id);
+        const count = countFor(loc);
+        if (count > 0) {
+          showError(`Cannot delete "${loc.name}": ${count} mould(s) stored here.`);
+          return;
+        }
+      }
+      const keptNames = locations
+        .filter((loc) => !deletions.includes(loc.id))
+        .map((loc) => {
+          const rename = renames.find((r) => r.id === loc.id);
+          return (rename ? rename.name : loc.name).toLowerCase();
+        });
+      const allNames = newName ? [...keptNames, newName.toLowerCase()] : keptNames;
+      const seen = new Set();
+      for (const name of allNames) {
+        if (seen.has(name)) {
+          showError(`Duplicate location name: "${name}".`);
+          return;
+        }
+        seen.add(name);
+      }
+
+      setBusy(button);
+      errorEl.textContent = "";
+      errorEl.classList.remove("error");
+      try {
+        for (const id of deletions) await invoke("delete_mould_location", { id });
+        for (const { id, name } of renames) {
+          await invoke("save_mould_location", { input: { id, name } });
+        }
+        if (newName) {
+          await invoke("save_mould_location", { input: { id: null, name: newName } });
+        }
+        close();
+      } catch (error) {
+        showError(String(error.message || error));
+      } finally {
+        setBusy(button, false);
       }
     });
   });
@@ -1518,7 +1740,6 @@ function renderStaffDashboard() {
   }
   if (category === "storekeeper") {
     if (hasPermission("cornice_log")) tabs.push(["cornice", "Cornice Logs"]);
-    tabs.push(["moulds", "Moulds"]);
     tabs.push(["cornice_stock", "Stock"]);
     if (hasPermission("production_log")) tabs.push(["production", "Production"]);
     if (hasPermission("deliveries")) tabs.push(["deliveries", "Deliveries"]);
@@ -1530,15 +1751,17 @@ function renderStaffDashboard() {
   if (category === "driver") {
     tabs.push(["dispatch", "Dispatch Orders"]);
     if (hasPermission("deliveries")) tabs.push(["deliveries", "Deliveries"]);
-    tabs.push(["moulds", "Moulds"]);
   }
   if (category === "helper") {
-    tabs.push(["moulds", "Moulds"]);
     tabs.push(["cornice_stock_ro", "Stock"]);
   }
   // Legacy permissions fallback
   if (hasPermission("overstock")) tabs.push(["overstock", "Overstock"]);
   if (hasPermission("cornice_rates_view")) tabs.push(["rates", "Rates"]);
+  // Mould Locations: view-only, granted per employee via Role & Permissions
+  if (hasPermission("mould_view") && !tabs.some(([id]) => id === "moulds")) {
+    tabs.push(["moulds", "Moulds"]);
+  }
 
   state.staffTabs = tabs.map(([id]) => id);
   if (!state.staffTabs.includes(state.staffView)) {
@@ -2060,31 +2283,47 @@ async function renderStaffRates() {
 }
 
 async function renderStaffMouldView() {
-  const [locations, items] = await Promise.all([
+  const [locations, columns, items] = await Promise.all([
     invoke("list_mould_locations"),
+    invoke("list_mould_location_columns"),
     invoke("list_mould_inventory"),
   ]);
+  const columnsFor = (locationId) => columns.filter((col) => col.location_id === locationId);
   const boxes = locations
     .map((loc) => {
-      const locItems = items.filter((item) => item.storage_location === loc.name);
+      const locItems = mouldsInLocation(loc, columns, items);
+      const colCards = columnsFor(loc.id)
+        .map((col) => {
+          const colItems = items.filter((item) => item.column_id === col.id);
+          return `
+            <div class="mould-column-card">
+              <h4><span>${escapeHtml(col.name)}</span></h4>
+              <div class="mould-slots">
+                ${colItems
+                  .map((item) => `<div class="mould-slot"><span>${escapeHtml(item.mould_name)}</span></div>`)
+                  .join("")}
+              </div>
+            </div>`;
+        })
+        .join("");
       return `
         <div class="day-box">
-          <h3><span>${escapeHtml(loc.name)}</span><small>${locItems.length}</small></h3>
-          ${table(["Mould Name", "Notes"], locItems.map((item) => ({ cells: [item.mould_name, item.notes] })))}
+          <h3><span>${escapeHtml(loc.name)} <small>(${locItems.length})</small></span></h3>
+          <div class="mould-columns">${colCards}</div>
         </div>`;
     })
     .join("");
-  const unmatched = items.filter((item) => !locations.some((loc) => loc.name === item.storage_location));
+  const unmatched = items.filter((item) => item.column_id == null);
   const unassigned = unmatched.length
     ? `<div class="day-box"><h3><span>Unassigned</span></h3>${table(
-        ["Mould Name", "Location", "Notes"],
-        unmatched.map((item) => ({ cells: [item.mould_name, item.storage_location, item.notes] })),
+        ["Mould Name", "Location"],
+        unmatched.map((item) => ({ cells: [item.mould_name, item.storage_location || "—"] })),
       )}</div>`
     : "";
   setPanel(
     "Mould Locations (Read-Only)",
     `<button class="ghost" data-refresh>Refresh</button>`,
-    boxes + unassigned || `<div class="empty">No moulds registered.</div>`,
+    `<div class="location-series-layout">${boxes}${unassigned}</div>` || `<div class="empty">No moulds registered.</div>`,
   );
   app.querySelector("[data-refresh]").addEventListener("click", renderStaffMouldView);
 }

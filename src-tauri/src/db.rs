@@ -126,6 +126,7 @@ impl AppState {
         run_cornice_unit_migrations(&db).await?;
         seed_assets(&db).await?;
         seed_if_needed(&db, &paths).await?;
+        backfill_mould_view_permissions(&db).await?;
 
         Ok(Self {
             db,
@@ -653,13 +654,74 @@ async fn run_data_migrations(db: &SqlitePool) -> Result<()> {
     .execute(db)
     .await?;
     log_migration(db, "create_mould_locations").await?;
-    for (index, name) in ["Near Dryer", "Singles Wall", "Doubles Wall"].iter().enumerate() {
+    for (index, name) in ["Singles Wall", "Doubles Wall", "Near Dryer"].iter().enumerate() {
         sqlx::query("INSERT OR IGNORE INTO mould_locations (name, sort_order) VALUES (?, ?)")
             .bind(name)
             .bind(index as i64)
             .execute(db)
             .await?;
     }
+
+    // 3b. Mould location columns (sub-locations): location -> column -> mould.
+    //     Reorders the seed locations (Singles Wall, Doubles Wall, Near Dryer),
+    //     gives every location a first column, and attaches legacy moulds to it.
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS mould_location_columns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            location_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (location_id, name),
+            FOREIGN KEY (location_id) REFERENCES mould_locations(id)
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+    log_migration(db, "create_mould_location_columns").await?;
+    alter_if_missing(
+        db,
+        "add_column_id_to_mould_inventory",
+        "mould_inventory",
+        "column_id",
+        "ALTER TABLE mould_inventory ADD COLUMN column_id INTEGER",
+    )
+    .await?;
+    sqlx::query(
+        r#"
+        UPDATE mould_locations
+        SET sort_order = CASE name
+            WHEN 'Singles Wall' THEN 0
+            WHEN 'Doubles Wall' THEN 1
+            WHEN 'Near Dryer' THEN 2
+            ELSE sort_order
+        END
+        WHERE name IN ('Singles Wall', 'Doubles Wall', 'Near Dryer')
+        "#,
+    )
+    .execute(db)
+    .await?;
+    seed_default_mould_columns(db).await?;
+    sqlx::query(
+        r#"
+        UPDATE mould_inventory
+        SET column_id = (
+            SELECT c.id
+            FROM mould_location_columns c
+            JOIN mould_locations l ON l.id = c.location_id
+            WHERE l.name = mould_inventory.storage_location
+            ORDER BY c.sort_order, c.id
+            LIMIT 1
+        )
+        WHERE column_id IS NULL
+          AND EXISTS (
+              SELECT 1 FROM mould_locations l WHERE l.name = mould_inventory.storage_location
+          )
+        "#,
+    )
+    .execute(db)
+    .await?;
 
     // 4. Copy cornice_stock rows into stock_items. Idempotent; runs on every
     //    startup (never logged) so late-arriving legacy rows are still copied.
@@ -892,6 +954,103 @@ async fn seed_if_needed(db: &SqlitePool, paths: &AppPaths) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('seed_version', '1')")
         .execute(db)
         .await?;
+    Ok(())
+}
+
+// One-shot: the Mould Locations staff tab became permission-driven (mould_view).
+// Grants it to the roles that had the tab before (storekeeper/driver/helper) so
+// nobody loses access; afterwards the admin's checkbox is the only control.
+async fn backfill_mould_view_permissions(db: &SqlitePool) -> Result<()> {
+    let applied = log_migration_if_unapplied(db, "grant_mould_view_to_stock_roles").await?;
+    if !applied {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO employee_permissions (employee_id, permission)
+        SELECT id, 'mould_view' FROM employees
+        WHERE staff_category IN ('storekeeper', 'driver', 'helper')
+        "#,
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+// One-shot: give every location the default R1..R5 columns, renaming the
+// legacy "Column 1" seeded by the earlier migration to R1. Logged, so columns
+// the admin deletes afterwards are not resurrected on a later start.
+async fn seed_default_mould_columns(db: &SqlitePool) -> Result<()> {
+    let applied = log_migration_if_unapplied(db, "seed_mould_columns_r1_r5").await?;
+    if !applied {
+        return Ok(());
+    }
+    let location_ids: Vec<(i64,)> =
+        sqlx::query_as("SELECT id FROM mould_locations").fetch_all(db).await?;
+    for (location_id,) in location_ids {
+        let cols: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT id, name FROM mould_location_columns WHERE location_id = ? ORDER BY sort_order, id",
+        )
+        .bind(location_id)
+        .fetch_all(db)
+        .await?;
+        if cols.is_empty() {
+            for index in 1..=5 {
+                sqlx::query(
+                    "INSERT INTO mould_location_columns (location_id, name, sort_order) VALUES (?, ?, ?)",
+                )
+                .bind(location_id)
+                .bind(format!("R{index}"))
+                .bind(index - 1)
+                .execute(db)
+                .await?;
+            }
+            continue;
+        }
+        let renamed = cols
+            .first()
+            .map(|(_, name)| name == "Column 1")
+            .unwrap_or(false);
+        if renamed {
+            if let Some((first_id, _)) = cols.first() {
+                sqlx::query("UPDATE mould_location_columns SET name = 'R1' WHERE id = ?")
+                    .bind(first_id)
+                    .execute(db)
+                    .await?;
+            }
+        }
+        // Re-read names so numbering below sees the post-rename state (a
+        // location whose only column was just renamed to R1 must not get R1
+        // inserted again).
+        let names: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM mould_location_columns WHERE location_id = ? ORDER BY sort_order, id",
+        )
+        .bind(location_id)
+        .fetch_all(db)
+        .await?;
+        if names.len() < 5 {
+            let mut max_index = 0;
+            for (name,) in &names {
+                if let Some(digits) = name.strip_prefix('R') {
+                    if let Ok(value) = digits.parse::<i64>() {
+                        max_index = max_index.max(value);
+                    }
+                }
+            }
+            let mut sort_order = names.len() as i64;
+            for index in (max_index + 1)..=5 {
+                sqlx::query(
+                    "INSERT INTO mould_location_columns (location_id, name, sort_order) VALUES (?, ?, ?)",
+                )
+                .bind(location_id)
+                .bind(format!("R{index}"))
+                .bind(sort_order)
+                .execute(db)
+                .await?;
+                sort_order += 1;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1504,7 +1663,35 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(first, "Near Dryer");
+        assert_eq!(first, "Singles Wall");
+        let last: String = sqlx::query_scalar(
+            "SELECT name FROM mould_locations ORDER BY sort_order DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(last, "Near Dryer");
+        let columns: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mould_location_columns")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(columns, 15, "each seeded location gets R1..R5");
+        let first_col: String = sqlx::query_scalar(
+            "SELECT c.name FROM mould_location_columns c
+             JOIN mould_locations l ON l.id = c.location_id
+             WHERE l.name = 'Singles Wall' ORDER BY c.sort_order LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(first_col, "R1");
+        let has_column_id: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('mould_inventory') WHERE name = 'column_id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(has_column_id, 1, "mould_inventory.column_id missing");
     }
 
     #[tokio::test]
@@ -1539,6 +1726,175 @@ mod tests {
         assert_eq!(stock, 5);
         assert_eq!(reserved, 2);
         assert_eq!(location, "Aisle 1");
+    }
+
+    #[tokio::test]
+    async fn mould_column_seed_renames_legacy_and_tops_up_to_r5() {
+        let pool = fresh_pool().await;
+        run_all_migrations(&pool).await;
+
+        // Simulate the state left by the earlier migration version: a
+        // "Column 1" per location, plus one user-added R2.
+        let singles: i64 = sqlx::query_scalar(
+            "SELECT id FROM mould_locations WHERE name = 'Singles Wall'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let near: i64 = sqlx::query_scalar(
+            "SELECT id FROM mould_locations WHERE name = 'Near Dryer'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM mould_location_columns")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for location_id in [singles, near] {
+            sqlx::query(
+                "INSERT INTO mould_location_columns (location_id, name, sort_order) VALUES (?, 'Column 1', 0)",
+            )
+            .bind(location_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO mould_location_columns (location_id, name, sort_order) VALUES (?, 'R2', 1)",
+        )
+        .bind(singles)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Re-arm the one-shot seed and run it.
+        sqlx::query(
+            "DELETE FROM _schema_migration_log WHERE migration_id = 'seed_mould_columns_r1_r5'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        seed_default_mould_columns(&pool).await.unwrap();
+
+        for location_id in [singles, near] {
+            let cols: Vec<String> = sqlx::query_scalar(
+                "SELECT name FROM mould_location_columns WHERE location_id = ? ORDER BY sort_order",
+            )
+            .bind(location_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert_eq!(cols, vec!["R1", "R2", "R3", "R4", "R5"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn mould_column_delete_only_allows_last_column() {
+        use crate::commands::delete_mould_location_column_checked as del;
+
+        let pool = fresh_pool().await;
+        run_all_migrations(&pool).await;
+
+        let loc: i64 = sqlx::query_scalar(
+            "SELECT id FROM mould_locations WHERE name = 'Singles Wall'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let cols: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT id, name FROM mould_location_columns WHERE location_id = ? ORDER BY sort_order",
+        )
+        .bind(loc)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cols.len(), 5);
+        let r4 = cols[3].0;
+        let r5 = cols[4].0;
+
+        // R4 is not the last column -> rejected.
+        let err = del(&pool, r4)
+            .await
+            .err()
+            .expect("deleting a non-last column must fail");
+        assert!(err.contains("Only the last column"), "unexpected: {err}");
+
+        // R5 is the last column and empty -> allowed.
+        del(&pool, r5)
+            .await
+            .expect("deleting the last empty column must succeed");
+
+        // Now R4 is the last column -> allowed.
+        del(&pool, r4)
+            .await
+            .expect("deleting the new last empty column must succeed");
+
+        // A non-empty last column is still rejected.
+        let last: i64 = sqlx::query_scalar(
+            "SELECT id FROM mould_location_columns WHERE location_id = ? ORDER BY sort_order DESC, id DESC LIMIT 1",
+        )
+        .bind(loc)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO mould_inventory (mould_name, storage_location, column_id, updated_at)
+             VALUES ('Test Mould', 'Singles Wall', ?, ?)",
+        )
+        .bind(last)
+        .bind(now_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let err = del(&pool, last)
+            .await
+            .err()
+            .expect("deleting a non-empty column must fail");
+        assert!(err.contains("mould(s) are in this column"), "unexpected: {err}");
+    }
+
+    #[tokio::test]
+    async fn mould_view_backfill_grants_stock_roles_once() {
+        let pool = fresh_pool().await;
+        run_all_migrations(&pool).await;
+
+        let now = now_string();
+        for (id, category) in [
+            ("S1", "storekeeper"),
+            ("D1", "driver"),
+            ("H1", "helper"),
+            ("C1", "cornice_hand"),
+        ] {
+            sqlx::query(
+                "INSERT INTO employees (id, name, finger, active, is_admin, password_hash, created_at, updated_at, staff_category)
+                 VALUES (?, ?, 'right-index', 1, 0, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(id)
+            .bind(LEGACY_ADMIN_HASH)
+            .bind(&now)
+            .bind(&now)
+            .bind(category)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        backfill_mould_view_permissions(&pool).await.unwrap();
+        // Running again must not re-grant (one-shot, logged).
+        backfill_mould_view_permissions(&pool).await.unwrap();
+
+        for (id, expected) in [("S1", 1i64), ("D1", 1), ("H1", 1), ("C1", 0)] {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM employee_permissions WHERE employee_id = ? AND permission = 'mould_view'",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(count, expected, "{id} mould_view backfill mismatch");
+        }
     }
 
     #[test]

@@ -331,6 +331,18 @@ export function requestEnroll({ employee, finger }) {
       return "Move your finger RIGHT ~1-2mm";
     };
 
+    // Which zone of the reader the current stage targets — drives the
+    // fingerprint glyph offset so the icon shows where the finger goes.
+    const stageOffset = (stage) => {
+      if (stage <= 5) return "center";
+      if (stage <= 8) return "down";
+      if (stage <= 11) return "up";
+      if (stage <= 13) return "left";
+      return "right";
+    };
+
+    const OFFSETS = ["center", "down", "up", "left", "right"];
+
     const fingerLabel = String(finger).replace(/-/g, " ");
     modalRoot.innerHTML = `
       <div class="modal-backdrop">
@@ -370,12 +382,14 @@ export function requestEnroll({ employee, finger }) {
     const renderProgress = () => {
       const pct = totalStages ? Math.round((completedStages / totalStages) * 100) : 0;
       fillEl.style.width = `${pct}%`;
+      const done = completedStages >= totalStages;
       const stage = Math.min(completedStages + 1, totalStages);
-      stageLabel.textContent =
-        completedStages >= totalStages
-          ? `All ${totalStages} stages captured`
-          : `Stage ${stage} of ${totalStages}`;
+      stageLabel.textContent = done
+        ? `All ${totalStages} stages captured`
+        : `Stage ${stage} of ${totalStages}`;
       promptEl.textContent = stagePrompt(stage);
+      const offset = done ? "center" : stageOffset(stage);
+      OFFSETS.forEach((o) => fpIcon.classList.toggle(`offset-${o}`, o === offset));
     };
 
     let failureText = null;

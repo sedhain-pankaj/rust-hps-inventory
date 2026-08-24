@@ -41,7 +41,7 @@ A full-screen, unskippable kiosk app (Rust + Tauri + SQLx, single SQLite databas
 - Clock in/out.
 - Full read access to the cornice production log.
 - Manages **cornice stock** — which cornice castings, which aisle, quantity in stock, quantity reserved for orders, free-text remarks. (Distinct from mould inventory — see §6.)
-- Manages **mould inventory** — add/edit entries (mould storage location).
+- Views **mould locations** (read-only); only admin edits them (see §4f).
 - Views production log, dispatch log.
 
 ### 4c. Non-cornice / Custom Order Staff
@@ -58,7 +58,7 @@ A full-screen, unskippable kiosk app (Rust + Tauri + SQLx, single SQLite databas
 - Read-only view of cornice mould/stock locations.
 
 ### 4f. All staff (shared)
-- Read-only view of mould inventory table (name of cornice mould, location). Editable only by store-keeper or admin.
+- Read-only view of **mould locations** — locations stacked vertically, each holding columns (sub-locations), each column holding mould names. Shown only to staff granted the **Mould Locations (view)** permission in Role & Permissions (backfilled once for store-keeper/driver/helper). Editable only by admin.
 
 ---
 
@@ -101,7 +101,7 @@ This is the most detail-sensitive rule, so stating it precisely:
 
 ## 6. Data Model Notes
 
-- **`mould_inventory`** — mould storage: which mould, which storage area. Read-only for all staff, editable by store-keeper/admin.
+- **`mould_locations` / `mould_location_columns` / `mould_inventory`** — three-level mould storage: location → column (sub-location) → mould name. Seeded locations, in order: Singles Wall, Doubles Wall, Near Dryer. Admin adds/removes locations and columns (a location deletes only when all its columns are empty; a column deletes only when empty and it is the last one, so columns are removed from the end — R5 before R4 — and a location always keeps at least one column) and adds/removes moulds. Staff with the `mould_view` permission get a read-only view.
 - **`cornice_stock`** — actual castings: which cornice, which aisle, quantity in stock, quantity reserved, remarks. Editable by store-keeper.
 - **`cornice_rate`** — rate table, originally seeded from `cornice_rate.csv` (legacy Python project format), now fully migrated into `hps.db` as the live source of truth. All staff can **view**; only admin can **modify** rates (already implemented per your note).
 - **Portability:** single kiosk, single SQLite file — no multi-writer concerns given the one-kiosk-plus-remote-admin model.

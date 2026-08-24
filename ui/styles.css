@@ -597,21 +597,143 @@ label {
 }
 .location-series-layout {
   display: flex;
+  flex-direction: column;
   gap: 16px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  align-items: flex-start;
-  padding-bottom: 10px;
-  scrollbar-width: auto;
 }
 .rate-group {
   margin: 0;
   min-width: 0;
 }
 .location-series-layout .day-box {
-  flex: 0 0 min(560px, 82vw);
-  min-width: 0;
   margin: 0;
+}
+.mould-columns {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  overflow-x: auto;
+  align-items: flex-start;
+  padding-bottom: 6px;
+}
+.mould-column-card {
+  flex: 0 0 96px;
+  width: 96px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--bg-0);
+  padding: 8px;
+}
+.mould-column-card h4 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.mould-column-card button.icon {
+  min-height: 26px;
+  width: auto;
+  padding: 0 4px;
+  flex: 0 0 auto;
+}
+.mould-column-card button.icon svg {
+  width: 14px;
+  height: 14px;
+}
+.mould-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mould-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid rgba(217, 164, 65, 0.45);
+  border-radius: var(--radius-s);
+  background: var(--brass-tint);
+  font-size: 0.88rem;
+}
+.mould-slot > span {
+  word-break: break-word;
+}
+.mould-slot button.icon {
+  min-height: 24px;
+  width: auto;
+  padding: 0 3px;
+  flex: 0 0 auto;
+}
+.mould-slot button.icon svg {
+  width: 13px;
+  height: 13px;
+}
+.mould-slot-form input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px dashed rgba(217, 164, 65, 0.65);
+  border-radius: var(--radius-s);
+  background: var(--brass-tint);
+  color: var(--text-1);
+  font-size: 0.88rem;
+}
+.loc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.loc-editor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-s);
+  background: var(--bg-0);
+}
+.loc-name {
+  cursor: pointer;
+  font-weight: 600;
+}
+.loc-name:hover {
+  color: var(--brass);
+}
+.loc-editor-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+}
+.loc-editor-row.loc-deleting {
+  opacity: 0.55;
+}
+.loc-editor-row.loc-deleting .loc-name {
+  text-decoration: line-through;
+}
+.loc-add-row {
+  border-style: dashed;
+}
+.loc-add-plus {
+  display: flex;
+  align-items: center;
+  color: var(--text-3);
+  flex: 0 0 auto;
+}
+.mould-unassigned-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.mould-unassigned-row:last-child {
+  border-bottom: none;
 }
 .rate-group-head {
   display: flex;
@@ -1206,7 +1328,25 @@ a.about-dev-value:hover {
   filter: invert(1) brightness(0.85);
   position: relative;
   z-index: 1;
-  transition: filter 0.3s;
+  transition: filter 0.3s, transform 0.45s ease;
+}
+
+/* Enrollment: shift the fingerprint glyph toward the zone the current
+   stage targets. The pulsing ring stays centered — it is the reader. */
+.auth-fp-icon.offset-down img {
+  transform: translateY(22px);
+}
+
+.auth-fp-icon.offset-up img {
+  transform: translateY(-22px);
+}
+
+.auth-fp-icon.offset-left img {
+  transform: translateX(-22px);
+}
+
+.auth-fp-icon.offset-right img {
+  transform: translateX(22px);
 }
 
 .auth-fp-icon .ring {

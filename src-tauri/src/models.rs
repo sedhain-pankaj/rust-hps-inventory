@@ -308,6 +308,7 @@ pub struct MouldInventory {
     pub mould_name: String,
     pub storage_location: String,
     pub notes: String,
+    pub column_id: Option<i64>,
     pub updated_at: String,
 }
 
@@ -315,8 +316,7 @@ pub struct MouldInventory {
 pub struct MouldInventoryInput {
     pub id: Option<i64>,
     pub mould_name: String,
-    pub storage_location: String,
-    pub notes: String,
+    pub column_id: Option<i64>,
 }
 
 // Mould Locations
@@ -330,6 +330,22 @@ pub struct MouldLocation {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MouldLocationInput {
     pub id: Option<i64>,
+    pub name: String,
+}
+
+// Mould Location Columns (sub-locations inside a location)
+#[derive(Debug, Clone, Serialize)]
+pub struct MouldLocationColumn {
+    pub id: i64,
+    pub location_id: i64,
+    pub name: String,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MouldLocationColumnInput {
+    pub id: Option<i64>,
+    pub location_id: i64,
     pub name: String,
 }
 

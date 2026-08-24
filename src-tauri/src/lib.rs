@@ -80,6 +80,9 @@ pub fn run() {
             list_mould_locations,
             save_mould_location,
             delete_mould_location,
+            list_mould_location_columns,
+            save_mould_location_column,
+            delete_mould_location_column,
             // New: clock event editing
             edit_clock_event,
             list_clock_event_edits,
