@@ -1,5 +1,5 @@
 import { escapeHtml, invoke } from "../api.js";
-import { alertModal, confirmModal, promptModal } from "../auth.js";
+import { alertModal, confirmModal, promptModal } from "../modals.js";
 import { app, setPanel, table, getWeekStartForDate } from "../core.js";
 
 // ==================== Admin: Payroll Panel ====================

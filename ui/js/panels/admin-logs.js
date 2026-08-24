@@ -1,5 +1,5 @@
 import { escapeHtml, formatAction, invoke, todayIso, weekStartIso } from "../api.js";
-import { alertModal, promptModal } from "../auth.js";
+import { alertModal, promptModal } from "../modals.js";
 import { app, state, setPanel, table, corniceLogCellHtml, emptyDbValues, dbField, collectDbValues, dbDisplay } from "../core.js";
 
 export async function renderTimePanel() {

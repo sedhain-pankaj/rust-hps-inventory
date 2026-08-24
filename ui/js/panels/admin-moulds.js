@@ -1,6 +1,6 @@
 import { escapeHtml, invoke, setBusy } from "../api.js";
 import { icon } from "../icons.js";
-import { alertModal, confirmModal } from "../auth.js";
+import { alertModal, confirmModal } from "../modals.js";
 import { mountSearchBox, matchesQuery } from "../search.js";
 import { app, state, setPanel } from "../core.js";
 

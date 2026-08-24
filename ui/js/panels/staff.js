@@ -1,6 +1,6 @@
 import { escapeHtml, formatAction, invoke, setBusy, todayIso, weekStartIso } from "../api.js";
 import { icon } from "../icons.js";
-import { confirmModal, promptModal } from "../auth.js";
+import { confirmModal, promptModal } from "../modals.js";
 import { createTableStore, mountInlineTable } from "../table.js";
 import { mountRatesCardGrid } from "../rates-cards.js";
 import { mountSearchBox, matchesQuery } from "../search.js";

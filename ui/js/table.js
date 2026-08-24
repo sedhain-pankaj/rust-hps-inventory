@@ -1,5 +1,5 @@
 import { escapeHtml } from "./api.js";
-import { alertModal } from "./auth.js";
+import { alertModal } from "./modals.js";
 import { icon } from "./icons.js";
 
 // Draft store shared by one or more inline tables within a single panel.

@@ -1,5 +1,6 @@
 import { escapeHtml, invoke, setBusy } from "../api.js";
-import { alertModal, requestAuth } from "../auth.js";
+import { alertModal } from "../modals.js";
+import { requestAuth } from "../auth.js";
 import { app, setPanel, fmtBytes } from "../core.js";
 
 // ==================== Admin: About Panel ====================

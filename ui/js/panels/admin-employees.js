@@ -1,5 +1,6 @@
 import { escapeHtml, invoke, setBusy } from "../api.js";
-import { alertModal, requestEnroll } from "../auth.js";
+import { alertModal } from "../modals.js";
+import { requestEnroll } from "../auth.js";
 import { app, state, permissionLabels, setPanel, table, formatTimestamp, fingerOptions, emptyEmployee } from "../core.js";
 
 export async function renderEmployeesPanel() {
