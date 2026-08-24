@@ -1,5 +1,5 @@
 import { escapeHtml, formatAction, invoke, todayIso, weekStartIso } from "../api.js";
-import { alertModal, promptModal } from "../modals.js";
+import { alertModal, confirmModal, promptModal } from "../modals.js";
 import { app, state, setPanel, table, corniceLogCellHtml, emptyDbValues, dbField, collectDbValues, dbDisplay } from "../core.js";
 
 export async function renderTimePanel() {
@@ -225,6 +225,12 @@ export async function renderDatabasePanel() {
     });
     app.querySelector("[data-delete-db-row]")?.addEventListener("click", async () => {
       if (!selected.rowid) return;
+      const confirmed = await confirmModal({
+        title: "Delete Row",
+        body: `Permanently delete row ${selected.rowid} from the "${data.table}" table? This cannot be undone.`,
+        confirmLabel: "Delete",
+      }).catch(() => false);
+      if (!confirmed) return;
       await invoke("delete_admin_table_row", {
         table: data.table,
         rowid: selected.rowid,
