@@ -1830,7 +1830,7 @@ mod tests {
             .await
             .expect("deleting the new last empty column must succeed");
 
-        // A non-empty last column is still rejected.
+        // A non-empty last column is allowed: its moulds are unassigned.
         let last: i64 = sqlx::query_scalar(
             "SELECT id FROM mould_location_columns WHERE location_id = ? ORDER BY sort_order DESC, id DESC LIMIT 1",
         )
@@ -1847,11 +1847,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let err = del(&pool, last)
+        del(&pool, last)
             .await
-            .err()
-            .expect("deleting a non-empty column must fail");
-        assert!(err.contains("mould(s) are in this column"), "unexpected: {err}");
+            .expect("deleting a non-empty column must succeed");
+        let unassigned: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM mould_inventory WHERE mould_name = 'Test Mould' AND column_id IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(unassigned, 1, "mould must be unassigned after column delete");
     }
 
     #[tokio::test]

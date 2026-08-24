@@ -1331,6 +1331,20 @@ a.about-dev-value:hover {
   transition: filter 0.3s, transform 0.45s ease;
 }
 
+/* Confirm modals: compact, non-interactive fingerprint glyph. */
+.confirm-fp-icon {
+  width: auto;
+  height: auto;
+  margin: 0 auto 12px;
+  cursor: default;
+}
+
+.confirm-fp-icon img {
+  width: 56px;
+  height: 56px;
+  filter: invert(1) brightness(0.7);
+}
+
 /* Enrollment: shift the fingerprint glyph toward the zone the current
    stage targets. The pulsing ring stays centered — it is the reader. */
 .auth-fp-icon.offset-down img {

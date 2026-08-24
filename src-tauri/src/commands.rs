@@ -2161,10 +2161,11 @@ pub async fn save_mould_location_column(
 /// so the rules are unit-testable without a `tauri::State`.
 ///
 /// Rules:
-/// - The column must be empty (no moulds assigned).
 /// - Only the last column (highest `sort_order`) of its location can be deleted,
 ///   so columns are removed from the end (R5 before R4, R4 before R3, …).
 /// - A location must keep at least one column.
+/// - Moulds in the deleted column are unassigned (`column_id = NULL`) and show
+///   up under "Unassigned" until re-placed.
 pub async fn delete_mould_location_column_checked(db: &sqlx::SqlitePool, id: i64) -> CommandResult<()> {
     let column: Option<(i64, i64)> = sqlx::query_as(
         "SELECT location_id, sort_order FROM mould_location_columns WHERE id = ?",
@@ -2174,14 +2175,6 @@ pub async fn delete_mould_location_column_checked(db: &sqlx::SqlitePool, id: i64
     .await
     .map_err(to_string)?;
     let (location_id, sort_order) = column.ok_or_else(|| "Column not found.".to_string())?;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mould_inventory WHERE column_id = ?")
-        .bind(id)
-        .fetch_one(db)
-        .await
-        .map_err(to_string)?;
-    if count > 0 {
-        return Err(format!("Cannot delete: {count} mould(s) are in this column."));
-    }
     let after: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM mould_location_columns
          WHERE location_id = ? AND (sort_order > ? OR (sort_order = ? AND id > ?))",
@@ -2209,6 +2202,11 @@ pub async fn delete_mould_location_column_checked(db: &sqlx::SqlitePool, id: i64
     if total <= 1 {
         return Err("A location must keep at least one column.".to_string());
     }
+    sqlx::query("UPDATE mould_inventory SET column_id = NULL WHERE column_id = ?")
+        .bind(id)
+        .execute(db)
+        .await
+        .map_err(to_string)?;
     sqlx::query("DELETE FROM mould_location_columns WHERE id = ?")
         .bind(id)
         .execute(db)

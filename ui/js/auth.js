@@ -600,6 +600,7 @@ export function confirmModal({
   warning = null,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  fpIcon = true,
 }) {
   return new Promise((resolve, reject) => {
     modalRoot.innerHTML = `
@@ -610,6 +611,10 @@ export function confirmModal({
             <button class="icon ghost" data-close title="Close">${icon("x")}</button>
           </header>
           <div class="body">
+            ${fpIcon ? `
+              <div class="auth-fp-icon confirm-fp-icon">
+                <img src="./assets/noun-fingerprint-1377758.svg" alt="Fingerprint" width="56" height="56" />
+              </div>` : ""}
             ${body ? `<p>${body}</p>` : ""}
             ${warning ? `<div class="scan-status warn">${escapeHtml(warning)}</div>` : ""}
           </div>

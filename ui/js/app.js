@@ -1363,7 +1363,7 @@ async function renderMouldLocationsPanel() {
         </div>`;
     })
     .join("");
-  const unmatched = items.filter((item) => item.column_id == null);
+  const unmatched = visibleItems.filter((item) => item.column_id == null);
   const unassigned = unmatched.length
     ? `
       <div class="day-box">
@@ -1429,9 +1429,13 @@ async function renderMouldLocationsPanel() {
     button.addEventListener("click", async () => {
       const columnId = Number(button.dataset.delCol);
       const colName = columns.find((col) => col.id === columnId)?.name || "?";
+      const mouldCount = items.filter((item) => item.column_id === columnId).length;
       const confirmed = await confirmModal({
         title: "Mould Locations",
-        body: `Delete column "${colName}"? Only the last column can be deleted, and it must be empty.`,
+        body: `Delete column "${colName}"?`,
+        warning: mouldCount
+          ? `This column holds ${mouldCount} mould(s). They will be moved to Unassigned.`
+          : null,
         confirmLabel: "Delete",
       }).catch(() => false);
       if (!confirmed) return;
