@@ -1,7 +1,7 @@
 import { escapeHtml, invoke } from "./api.js";
 import { icon } from "./icons.js";
 
-const modalRoot = document.getElementById("modal-root");
+export const modalRoot = document.getElementById("modal-root");
 
 export function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

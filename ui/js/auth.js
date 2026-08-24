@@ -1,6 +1,6 @@
 import { escapeHtml, invoke, setBusy } from "./api.js";
 import { icon } from "./icons.js";
-import { closeModal, wait } from "./modals.js";
+import { closeModal, modalRoot, wait } from "./modals.js";
 
 function mapRetryReason(reason) {
   const lower = reason.toLowerCase();
