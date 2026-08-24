@@ -17,15 +17,28 @@ The fingerprint stack is shared via the C helper binary:
 ## Current Runtime Architecture
 
 ### Backend (Rust/Tauri)
-- `src-tauri/src/commands.rs`: Tauri commands and enrollment orchestration
+- `src-tauri/src/commands/`: Tauri commands, split by domain. `mod.rs` holds shared
+  helpers (`CommandResult`, admin-table commands, `app_status`, storage) and re-exports
+  everything so `lib.rs` is untouched. Domain modules: `employees.rs`, `stock.rs`,
+  `rates.rs`, `logs.rs`, `alerts.rs`, `moulds.rs`, `payroll.rs`, `dispatch.rs`.
 - `src-tauri/src/fingerprint.rs`: helper discovery, spawn, protocol parsing, template import/export
-- `src-tauri/src/db.rs`: app paths, SQLite init, shared app state
+- `src-tauri/src/db/`: SQLite layer, split into `mod.rs` (AppState, AppPaths, job structs,
+  employee/notification query helpers), `migrate.rs` (schema DDL + column/data/cornice-unit
+  migrations), `seed.rs` (asset/employee/rate/stock seeding, legacy imports), `util.rs`
+  (pure date/password/unit/csv helpers). Glob re-exports keep the `crate::db::` API stable.
 - `src-tauri/src/backup.rs`: VACUUM INTO backups, weekly/monthly scheduler, retention, `exit_kiosk`
 - `src-tauri/src/models.rs`: command response/request models
 
 ### Frontend (Web UI)
-- `ui/js/app.js`: admin/staff screens, enrollment polling UI
+- `ui/js/app.js`: orchestrator — session management, navigation, admin/staff tab dispatch
+- `ui/js/core.js`: shared `state`, `app` root, shell `table`/`setPanel` helpers, date/format/db utilities
+- `ui/js/panels/`: one module per screen — `admin-alerts`, `admin-employees`, `admin-stock`,
+  `admin-rates`, `admin-logs`, `admin-about`, `admin-payroll`, `admin-moulds`,
+  `admin-dispatch`, `staff`
+- `ui/js/modals.js`: generic modal primitives (`alertModal`, `promptModal`, `confirmModal`, `closeModal`)
+- `ui/js/auth.js`: fingerprint/password auth + enrollment flows
 - `ui/js/api.js`: Tauri invoke wrappers
+- `ui/js/table.js`, `ui/js/rates-cards.js`, `ui/js/search.js`, `ui/js/icons.js`: shared components
 
 ### Persistence
 - SQLite DB: `hps.db` (repo root)
