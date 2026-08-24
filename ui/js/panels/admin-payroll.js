@@ -1,13 +1,13 @@
-import { escapeHtml, invoke } from "../api.js";
+import { escapeHtml, invoke, weekStartIso } from "../api.js";
 import { alertModal, confirmModal, promptModal } from "../modals.js";
-import { app, setPanel, table, getWeekStartForDate } from "../core.js";
+import { app, setPanel, table } from "../core.js";
 
 // ==================== Admin: Payroll Panel ====================
 
 export async function renderPayrollPanel() {
   setPanel("Weekly Payroll", `<button class="ghost" data-refresh>Refresh</button>`, `<div class="message">Loading payroll…</div>`);
   try {
-    const weekStart = getWeekStartForDate(new Date().toISOString().slice(0, 10));
+    const weekStart = weekStartIso();
     const payrollData = await invoke("get_all_payroll_week", { request: { week_start: weekStart } });
     const unresolved = payrollData.filter(p => p.status === "unresolved");
 

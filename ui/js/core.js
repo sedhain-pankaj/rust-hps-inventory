@@ -97,14 +97,6 @@ export function shiftIso(iso, days) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-export function getWeekStartForDate(dateStr) {
-  const d = new Date(dateStr);
-  const day = d.getDay();
-  const diff = (day + 5) % 7;
-  d.setDate(d.getDate() - diff);
-  return d.toISOString().slice(0, 10);
-}
-
 export function parsePrevValues(log) {
   if (!log.prev_values) return null;
   try {
