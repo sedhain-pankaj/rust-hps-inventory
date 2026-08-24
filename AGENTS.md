@@ -208,7 +208,13 @@ Use these when validating expected UX/progress wording and subprocess behavior.
 ```bash
 cd src-tauri
 cargo check
+cargo test          # 26 Rust tests (db, backup, payroll math, search, storage)
 cargo build --release
+```
+
+Frontend pure-helper tests (Node's built-in runner, no deps):
+```bash
+node --test ui/js/test/pure.test.mjs
 ```
 
 Direct helper smoke test:
