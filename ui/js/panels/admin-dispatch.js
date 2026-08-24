@@ -1,4 +1,5 @@
 import { escapeHtml, invoke } from "../api.js";
+import { alertModal } from "../modals.js";
 import { app, state, setPanel, table } from "../core.js";
 
 // ==================== Admin: Dispatch Orders Panel ====================
@@ -28,7 +29,7 @@ export async function renderDispatchOrdersPanel() {
             o.quantity,
             o.delivery_location,
             `<span class="tag ${o.status === 'delivered' ? 'tag-ok' : o.status === 'pending' ? 'tag-err' : 'tag-warn'}">${escapeHtml(o.status)}</span>`,
-            o.created_at.replace("T", " "),
+            o.created_at ? o.created_at.replace("T", " ") : "—",
             o.delivered_by_name || "—",
             o.status === "pending" ? `<button data-mark-progress="${o.id}">Start</button>` : "",
           ],
@@ -47,34 +48,42 @@ export async function renderDispatchOrdersPanel() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const fd = new FormData(event.currentTarget);
-    await invoke("create_dispatch_order", {
-      input: {
-        id: null,
-        cornice_model: fd.get("cornice_model"),
-        quantity: Number(fd.get("quantity")),
-        delivery_location: fd.get("delivery_location"),
-        status: null,
-        remarks: fd.get("remarks"),
-      },
-      createdBy: state.admin.id,
-    });
-    renderDispatchOrdersPanel();
+    try {
+      await invoke("create_dispatch_order", {
+        input: {
+          id: null,
+          cornice_model: fd.get("cornice_model"),
+          quantity: Number(fd.get("quantity")),
+          delivery_location: fd.get("delivery_location"),
+          status: null,
+          remarks: fd.get("remarks"),
+        },
+        createdBy: state.admin.id,
+      });
+      renderDispatchOrdersPanel();
+    } catch (error) {
+      await alertModal({ title: "Dispatch Orders", message: String((error && error.message) || error) });
+    }
   });
 
   app.querySelectorAll("[data-mark-progress]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      await invoke("update_dispatch_order", {
-        input: {
-          id: Number(btn.dataset.markProgress),
-          cornice_model: "",
-          quantity: 0,
-          delivery_location: "",
-          status: "in_progress",
-          remarks: "",
-        },
-        updatedBy: state.admin.id,
-      });
-      renderDispatchOrdersPanel();
+      try {
+        await invoke("update_dispatch_order", {
+          input: {
+            id: Number(btn.dataset.markProgress),
+            cornice_model: "",
+            quantity: 0,
+            delivery_location: "",
+            status: "in_progress",
+            remarks: "",
+          },
+          updatedBy: state.admin.id,
+        });
+        renderDispatchOrdersPanel();
+      } catch (error) {
+        await alertModal({ title: "Dispatch Orders", message: String((error && error.message) || error) });
+      }
     });
   });
 }

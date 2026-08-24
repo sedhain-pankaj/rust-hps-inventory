@@ -90,14 +90,18 @@ export async function renderPayrollPanel() {
               confirmLabel: "Accept",
             }).catch(() => false);
             if (!accept) return;
-            await invoke("override_payroll_proration", {
-              input: {
-                employee_id: btn.dataset.emp,
-                week_start: btn.dataset.week,
-                accept_prorated: true,
-              },
-            });
-            renderPayrollPanel();
+            try {
+              await invoke("override_payroll_proration", {
+                input: {
+                  employee_id: btn.dataset.emp,
+                  week_start: btn.dataset.week,
+                  accept_prorated: true,
+                },
+              });
+              renderPayrollPanel();
+            } catch (e) {
+              await alertModal({ title: "Weekly Payroll", message: String((e && e.message) || e) });
+            }
           });
         });
 
@@ -109,14 +113,18 @@ export async function renderPayrollPanel() {
               confirmLabel: "Override",
             }).catch(() => false);
             if (!override) return;
-            await invoke("override_payroll_proration", {
-              input: {
-                employee_id: btn.dataset.emp,
-                week_start: btn.dataset.week,
-                accept_prorated: false,
-              },
-            });
-            renderPayrollPanel();
+            try {
+              await invoke("override_payroll_proration", {
+                input: {
+                  employee_id: btn.dataset.emp,
+                  week_start: btn.dataset.week,
+                  accept_prorated: false,
+                },
+              });
+              renderPayrollPanel();
+            } catch (e) {
+              await alertModal({ title: "Weekly Payroll", message: String((e && e.message) || e) });
+            }
           });
         });
       }

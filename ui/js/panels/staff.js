@@ -1,6 +1,6 @@
 import { escapeHtml, formatAction, invoke, setBusy, todayIso, weekStartIso } from "../api.js";
 import { icon } from "../icons.js";
-import { confirmModal, promptModal } from "../modals.js";
+import { alertModal, confirmModal, promptModal } from "../modals.js";
 import { createTableStore, mountInlineTable } from "../table.js";
 import { mountRatesCardGrid } from "../rates-cards.js";
 import { mountSearchBox, matchesQuery } from "../search.js";
@@ -298,16 +298,20 @@ export async function renderStaffProduction() {
   app.querySelector("[data-production-form]").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    await invoke("add_production_log", {
-      input: {
-        employee_id: state.currentStaff.id,
-        log_date: todayIso(),
-        item: form.get("item"),
-        quantity: Number(form.get("quantity")),
-        notes: form.get("notes"),
-      },
-    });
-    renderStaffProduction();
+    try {
+      await invoke("add_production_log", {
+        input: {
+          employee_id: state.currentStaff.id,
+          log_date: todayIso(),
+          item: form.get("item"),
+          quantity: Number(form.get("quantity")),
+          notes: form.get("notes"),
+        },
+      });
+      renderStaffProduction();
+    } catch (error) {
+      await alertModal({ title: "Production Log", message: String((error && error.message) || error) });
+    }
   });
 }
 
@@ -335,16 +339,20 @@ export async function renderStaffOverstock() {
   app.querySelector("[data-overstock-form]").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    await invoke("add_overstock", {
-      input: {
-        employee_id: state.currentStaff.id,
-        model: form.get("model"),
-        quantity: Number(form.get("quantity")),
-        aisle: form.get("aisle"),
-        notes: form.get("notes"),
-      },
-    });
-    renderStaffOverstock();
+    try {
+      await invoke("add_overstock", {
+        input: {
+          employee_id: state.currentStaff.id,
+          model: form.get("model"),
+          quantity: Number(form.get("quantity")),
+          aisle: form.get("aisle"),
+          notes: form.get("notes"),
+        },
+      });
+      renderStaffOverstock();
+    } catch (error) {
+      await alertModal({ title: "Overstock", message: String((error && error.message) || error) });
+    }
   });
 }
 
@@ -373,16 +381,20 @@ export async function renderStaffDeliveries() {
   app.querySelector("[data-delivery-form]").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    await invoke("add_delivery", {
-      input: {
-        driver_id: state.currentStaff.id,
-        delivery_date: todayIso(),
-        address: form.get("address"),
-        items: form.get("items"),
-        notes: form.get("notes"),
-      },
-    });
-    renderStaffDeliveries();
+    try {
+      await invoke("add_delivery", {
+        input: {
+          driver_id: state.currentStaff.id,
+          delivery_date: todayIso(),
+          address: form.get("address"),
+          items: form.get("items"),
+          notes: form.get("notes"),
+        },
+      });
+      renderStaffDeliveries();
+    } catch (error) {
+      await alertModal({ title: "Deliveries", message: String((error && error.message) || error) });
+    }
   });
 }
 
@@ -402,7 +414,7 @@ export async function renderDriverDispatchView() {
           o.quantity,
           o.delivery_location,
             `<span class="tag ${o.status === 'delivered' ? 'tag-ok' : o.status === 'pending' ? 'tag-err' : 'tag-warn'}">${escapeHtml(o.status)}</span>`,
-          o.created_at.replace("T", " "),
+          o.created_at ? o.created_at.replace("T", " ") : "—",
           `<button data-deliver-order="${o.id}">Mark Delivered</button>`,
         ],
       }))
@@ -422,18 +434,22 @@ export async function renderDriverDispatchView() {
           label: "Delivery remarks (optional)",
           confirmLabel: "Deliver",
         }).catch(() => "")) || "";
-      await invoke("update_dispatch_order", {
-        input: {
-          id: Number(btn.dataset.deliverOrder),
-          cornice_model: "",
-          quantity: 0,
-          delivery_location: "",
-          status: "delivered",
-          remarks,
-        },
-        updatedBy: state.currentStaff.id,
-      });
-      renderDriverDispatchView();
+      try {
+        await invoke("update_dispatch_order", {
+          input: {
+            id: Number(btn.dataset.deliverOrder),
+            cornice_model: "",
+            quantity: 0,
+            delivery_location: "",
+            status: "delivered",
+            remarks,
+          },
+          updatedBy: state.currentStaff.id,
+        });
+        renderDriverDispatchView();
+      } catch (error) {
+        await alertModal({ title: "Dispatch Orders", message: String((error && error.message) || error) });
+      }
     });
   });
 }

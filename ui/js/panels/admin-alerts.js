@@ -1,4 +1,5 @@
 import { invoke } from "../api.js";
+import { alertModal } from "../modals.js";
 import { app, setPanel, table } from "../core.js";
 
 export async function renderAlertsPanel() {
@@ -26,8 +27,12 @@ export async function renderAlertsPanel() {
   app.querySelector("[data-refresh]")?.addEventListener("click", renderAlertsPanel);
   app.querySelectorAll("[data-resolve]").forEach((button) => {
     button.addEventListener("click", async () => {
-      await invoke("resolve_alert", { id: Number(button.dataset.resolve) });
-      renderAlertsPanel();
+      try {
+        await invoke("resolve_alert", { id: Number(button.dataset.resolve) });
+        renderAlertsPanel();
+      } catch (error) {
+        await alertModal({ title: "Admin Alerts", message: String((error && error.message) || error) });
+      }
     });
   });
 }

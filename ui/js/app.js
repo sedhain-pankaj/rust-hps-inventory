@@ -291,18 +291,40 @@ function switchAdminTab(id) {
 }
 
 async function renderAdminPanel() {
-  if (state.adminView === "alerts") return renderAlertsPanel();
-  if (state.adminView === "employees") return renderEmployeesPanel();
-  if (state.adminView === "enroll") return renderEnrollPanel();
-  if (state.adminView === "payroll") return renderPayrollPanel();
-  if (state.adminView === "dispatch") return renderDispatchOrdersPanel();
-  if (state.adminView === "mould_inventory") return renderMouldLocationsPanel();
-  if (state.adminView === "stock") return renderStockPanel();
-  if (state.adminView === "rates") return renderRatesPanel();
-  if (state.adminView === "time") return renderTimePanel();
-  if (state.adminView === "logs") return renderLogsPanel();
-  if (state.adminView === "about") return renderAboutPanel();
-  return renderDatabasePanel();
+  const render =
+    state.adminView === "alerts"
+      ? renderAlertsPanel
+      : state.adminView === "employees"
+        ? renderEmployeesPanel
+        : state.adminView === "enroll"
+          ? renderEnrollPanel
+          : state.adminView === "payroll"
+            ? renderPayrollPanel
+            : state.adminView === "dispatch"
+              ? renderDispatchOrdersPanel
+              : state.adminView === "mould_inventory"
+                ? renderMouldLocationsPanel
+                : state.adminView === "stock"
+                  ? renderStockPanel
+                  : state.adminView === "rates"
+                    ? renderRatesPanel
+                    : state.adminView === "time"
+                      ? renderTimePanel
+                      : state.adminView === "logs"
+                        ? renderLogsPanel
+                        : state.adminView === "about"
+                          ? renderAboutPanel
+                          : renderDatabasePanel;
+  try {
+    await render();
+  } catch (error) {
+    setPanel(
+      "Error",
+      `<button class="ghost" data-retry>Retry</button>`,
+      `<div class="message error">${escapeHtml(String((error && error.message) || error))}</div>`,
+    );
+    app.querySelector("[data-retry]")?.addEventListener("click", renderAdminPanel);
+  }
 }
 
 function renderStaffDashboard() {
@@ -370,17 +392,38 @@ async function renderStaffPanel() {
     setPanel("Staff", "", `<div class="empty">No access — this account has no enabled permissions.</div>`);
     return;
   }
-  if (view === "clock") return renderStaffClock();
-  if (view === "cornice") return renderStaffCornice();
-  if (view === "production") return renderStaffProduction();
-  if (view === "overstock") return renderStaffOverstock();
-  if (view === "deliveries") return renderStaffDeliveries();
-  if (view === "dispatch") return renderDriverDispatchView();
-  if (view === "moulds") return renderStaffMouldView();
-  if (view === "cornice_stock") return renderStockPanel();
-  if (view === "cornice_stock_ro") return renderStaffStockRO();
-  if (view === "payroll") return renderStaffPayroll();
-  return renderStaffRates();
+  const render =
+    view === "clock"
+      ? renderStaffClock
+      : view === "cornice"
+        ? renderStaffCornice
+        : view === "production"
+          ? renderStaffProduction
+          : view === "overstock"
+            ? renderStaffOverstock
+            : view === "deliveries"
+              ? renderStaffDeliveries
+              : view === "dispatch"
+                ? renderDriverDispatchView
+                : view === "moulds"
+                  ? renderStaffMouldView
+                  : view === "cornice_stock"
+                    ? renderStockPanel
+                    : view === "cornice_stock_ro"
+                      ? renderStaffStockRO
+                      : view === "payroll"
+                        ? renderStaffPayroll
+                        : renderStaffRates;
+  try {
+    await render();
+  } catch (error) {
+    setPanel(
+      "Error",
+      `<button class="ghost" data-retry>Retry</button>`,
+      `<div class="message error">${escapeHtml(String((error && error.message) || error))}</div>`,
+    );
+    app.querySelector("[data-retry]")?.addEventListener("click", renderStaffPanel);
+  }
 }
 
 function screenShell(title, subtitle, content, contentClass = "") {

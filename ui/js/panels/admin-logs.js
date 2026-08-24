@@ -212,16 +212,20 @@ export async function renderDatabasePanel() {
     app.querySelector("[data-db-form]").addEventListener("submit", async (event) => {
       event.preventDefault();
       const values = collectDbValues(data.columns, event.currentTarget);
-      const result = await invoke("save_admin_table_row", {
-        input: {
-          table: data.table,
-          rowid: selected.rowid,
-          values,
-        },
-      });
-      state.selectedDbRow = null;
-      state.adminDbTable = result.table;
-      renderDatabasePanel();
+      try {
+        const result = await invoke("save_admin_table_row", {
+          input: {
+            table: data.table,
+            rowid: selected.rowid,
+            values,
+          },
+        });
+        state.selectedDbRow = null;
+        state.adminDbTable = result.table;
+        renderDatabasePanel();
+      } catch (error) {
+        await alertModal({ title: "Database", message: String((error && error.message) || error) });
+      }
     });
     app.querySelector("[data-delete-db-row]")?.addEventListener("click", async () => {
       if (!selected.rowid) return;
@@ -231,12 +235,16 @@ export async function renderDatabasePanel() {
         confirmLabel: "Delete",
       }).catch(() => false);
       if (!confirmed) return;
-      await invoke("delete_admin_table_row", {
-        table: data.table,
-        rowid: selected.rowid,
-      });
-      state.selectedDbRow = null;
-      renderDatabasePanel();
+      try {
+        await invoke("delete_admin_table_row", {
+          table: data.table,
+          rowid: selected.rowid,
+        });
+        state.selectedDbRow = null;
+        renderDatabasePanel();
+      } catch (error) {
+        await alertModal({ title: "Database", message: String((error && error.message) || error) });
+      }
     });
   }
   app.querySelector("[data-refresh]").addEventListener("click", () => {
