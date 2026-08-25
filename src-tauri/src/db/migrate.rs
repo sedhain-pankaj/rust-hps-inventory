@@ -505,24 +505,37 @@ pub(crate) async fn run_data_migrations(db: &SqlitePool) -> Result<()> {
     )
     .await?;
 
-    // 2b. payroll_periods proration controls. `threshold_override` lets an admin
-    //     force a specific base-unit threshold (e.g. the standard 180) instead of
-    //     the hours-based proration; `reviewed` records that an admin has already
-    //     approved the week so it is not re-flagged for review.
-    alter_if_missing(
-        db,
-        "add_threshold_override_to_payroll_periods",
-        "payroll_periods",
-        "threshold_override",
-        "ALTER TABLE payroll_periods ADD COLUMN threshold_override REAL",
-    )
-    .await?;
+    // 2b. payroll_periods review flag: records that an admin has already approved
+    //     the week so it is not re-flagged for review.
     alter_if_missing(
         db,
         "add_reviewed_to_payroll_periods",
         "payroll_periods",
         "reviewed",
         "ALTER TABLE payroll_periods ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+
+    // 2c. Proration override: `use_standard_week`, when set, treats the week as a
+    //     standard 40-hr week for BOTH base pay and the unit threshold (used when
+    //     the clocked hours are wrong). Replaces an earlier, never-used
+    //     `threshold_override` column — drop it if a prior build added it.
+    let has_threshold_override: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('payroll_periods') WHERE name = 'threshold_override'",
+    )
+    .fetch_one(db)
+    .await?;
+    if has_threshold_override > 0 {
+        sqlx::query("ALTER TABLE payroll_periods DROP COLUMN threshold_override")
+            .execute(db)
+            .await?;
+    }
+    alter_if_missing(
+        db,
+        "add_use_standard_week_to_payroll_periods",
+        "payroll_periods",
+        "use_standard_week",
+        "ALTER TABLE payroll_periods ADD COLUMN use_standard_week INTEGER NOT NULL DEFAULT 0",
     )
     .await?;
 

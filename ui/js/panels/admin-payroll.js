@@ -86,7 +86,7 @@ export async function renderPayrollPanel() {
           btn.addEventListener("click", async () => {
             const accept = await confirmModal({
               title: "Weekly Payroll",
-              body: "Accept the prorated unit threshold for this employee?",
+              body: "Accept the prorated base pay and unit threshold based on the clocked hours for this employee?",
               confirmLabel: "Accept",
             }).catch(() => false);
             if (!accept) return;

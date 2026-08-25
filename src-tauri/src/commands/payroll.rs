@@ -34,12 +34,15 @@ struct PayrollMath {
     status: String,
 }
 
-/// Units produced per hour worked (36 units / 8-hr day). The base-pay unit
-/// threshold for a week is `UNITS_PER_HOUR * hours_worked` — a full 40-hr week
-/// yields the standard 180 units.
+/// Base pay rate per hour worked. A full 40-hr week earns 40 × $28.50 = $1140.
+const BASE_RATE_PER_HOUR: f64 = 28.50;
+/// Units produced per hour worked (36 units / 8-hr day). To earn the base rate
+/// you must average this many units per hour; the base-pay unit threshold for a
+/// week is `UNITS_PER_HOUR * hours_worked` (a full 40-hr week → 180 units).
 const UNITS_PER_HOUR: f64 = 4.5;
-/// Standard full-week threshold (40 hr × 4.5 units/hr).
-const STANDARD_THRESHOLD: f64 = 180.0;
+/// A "standard" week is 40 hours (5 days × 8 hr). Used when an admin overrides
+/// a week to standard (e.g. the clocked hours are wrong).
+const STANDARD_WEEK_HOURS: f64 = 40.0;
 /// Hours band considered a "normal" full week. A week outside this band has an
 /// unusual hours-based proration and is flagged for admin review.
 const MIN_NORMAL_HOURS: f64 = 39.0;
@@ -74,24 +77,19 @@ fn final_status(math_status: &str, total_hours: f64, reviewed: bool) -> String {
 }
 
 /// Pure payroll math: splits cornice rows into known units and unknown-rate
-/// details, then computes pay. The base-pay unit threshold is prorated by hours
-/// worked (`4.5 * hours`), unless `threshold_override` forces a specific value
-/// (e.g. an admin override to the standard 180). The first `threshold` made
-/// units are included in base pay; each unit above earns the extra unit rate.
-/// Any custom or unknown-rate row makes the week "unresolved" until an admin
-/// sets the rate.
-fn compute_payroll(
-    rows: &[CorniceRowForPay],
-    total_hours: f64,
-    threshold_override: Option<f64>,
-) -> PayrollMath {
-    const BASE_PAY: f64 = 1140.0;
+/// details, then computes pay. Both base pay and the base-pay unit threshold
+/// scale linearly with `effective_hours` (the hours to prorate by — the clocked
+/// hours, or 40 when an admin overrode the week to standard):
+///   base_pay  = $28.50 × effective_hours
+///   threshold = 4.5    × effective_hours
+/// The first `threshold` made units are covered by base pay; each unit above
+/// earns the extra unit rate. Any custom or unknown-rate row makes the week
+/// "unresolved" until an admin sets the rate.
+fn compute_payroll(rows: &[CorniceRowForPay], effective_hours: f64, standard_week: bool) -> PayrollMath {
     const EXTRA_UNIT_RATE: f64 = 3.80;
 
-    let threshold = match threshold_override {
-        Some(t) => round2(t),
-        None => round2(UNITS_PER_HOUR * total_hours),
-    };
+    let base_pay = round2(BASE_RATE_PER_HOUR * effective_hours);
+    let threshold = round2(UNITS_PER_HOUR * effective_hours);
 
     let mut total_units_known = 0.0_f64;
     let mut unknown_details: Vec<UnknownRateDetail> = Vec::new();
@@ -113,9 +111,10 @@ fn compute_payroll(
     let total_units_known = round2(total_units_known);
     let total_units_unknown: f64 = unknown_details.iter().map(|d| d.quantity as f64).sum();
 
-    let threshold_note = match threshold_override {
-        Some(_) => format!("Standard {:.0} units (admin override)", STANDARD_THRESHOLD),
-        None => format!("4.5 units/hr × {:.1}h worked", total_hours),
+    let threshold_note = if standard_week {
+        format!("Standard {:.0}-hr week (admin override)", STANDARD_WEEK_HOURS)
+    } else {
+        format!("4.5 units/hr × {:.1}h worked", effective_hours)
     };
 
     let (gross_pay, extra_unit_pay, pay_equation, status) = if !unknown_details.is_empty() {
@@ -135,10 +134,10 @@ fn compute_payroll(
     } else {
         let extra_units = round2((total_units_known - threshold).max(0.0));
         let eup = round2(extra_units * EXTRA_UNIT_RATE);
-        let gp = round2(BASE_PAY + eup);
+        let gp = round2(base_pay + eup);
         let eq = format!(
             "${:.2} (base) + ${:.2} ({:.0} extra units × $3.80) = ${:.2}",
-            BASE_PAY, eup, extra_units, gp
+            base_pay, eup, extra_units, gp
         );
         (Some(gp), eup, eq, "final".to_string())
     };
@@ -149,7 +148,7 @@ fn compute_payroll(
         unknown_details,
         unit_threshold: threshold,
         threshold_note,
-        base_pay: BASE_PAY,
+        base_pay,
         gross_pay,
         extra_unit_pay,
         pay_equation,
@@ -168,15 +167,15 @@ fn cornice_rows_for_pay(rows: &[sqlx::sqlite::SqliteRow]) -> Vec<CorniceRowForPa
         .collect()
 }
 
-/// Read the admin proration controls for a week. Returns `(threshold_override,
-/// reviewed)` — both default to "none" when the period row doesn't exist yet.
+/// Read the admin proration controls for a week. Returns `(use_standard_week,
+/// reviewed)` — both default to false when the period row doesn't exist yet.
 async fn read_payroll_flags(
     db: &sqlx::SqlitePool,
     employee_id: &str,
     week_start: &str,
-) -> Result<(Option<f64>, bool), String> {
-    let row: Option<(Option<f64>, i64)> = sqlx::query_as(
-        "SELECT threshold_override, reviewed FROM payroll_periods \
+) -> Result<(bool, bool), String> {
+    let row: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT use_standard_week, reviewed FROM payroll_periods \
          WHERE employee_id = ? AND week_start = ?",
     )
     .bind(employee_id)
@@ -185,19 +184,19 @@ async fn read_payroll_flags(
     .await
     .map_err(to_string)?;
     Ok(match row {
-        Some((ov, rev)) => (ov, rev != 0),
-        None => (None, false),
+        Some((std, rev)) => (std != 0, rev != 0),
+        None => (false, false),
     })
 }
 
 /// Compute the payroll response for one employee-week, honouring any admin
-/// threshold override / review flag. Pure read — does not persist.
+/// standard-week override / review flag. Pure read — does not persist.
 async fn compute_week(
     db: &sqlx::SqlitePool,
     employee_id: &str,
     employee_name: &str,
     week_start: chrono::NaiveDate,
-    threshold_override: Option<f64>,
+    use_standard_week: bool,
     reviewed: bool,
 ) -> Result<PayrollWeekResponse, String> {
     let week_end = week_start + chrono::Duration::days(6);
@@ -233,7 +232,19 @@ async fn compute_week(
     .await
     .map_err(to_string)?;
 
-    let math = compute_payroll(&cornice_rows_for_pay(&cornice_rows), total_hours, threshold_override);
+    // Prorate by the clocked hours, or a standard 40-hr week when an admin has
+    // overridden the week (e.g. the clock data is wrong). The response still
+    // reports the clocked `total_hours` so the discrepancy is visible.
+    let effective_hours = if use_standard_week {
+        STANDARD_WEEK_HOURS
+    } else {
+        total_hours
+    };
+    let math = compute_payroll(
+        &cornice_rows_for_pay(&cornice_rows),
+        effective_hours,
+        use_standard_week,
+    );
     let status = final_status(&math.status, total_hours, reviewed);
     let needs_admin_review = status == "unresolved" || status == "review";
 
@@ -261,7 +272,7 @@ async fn compute_week(
 async fn upsert_payroll_period(
     db: &sqlx::SqlitePool,
     response: &PayrollWeekResponse,
-    threshold_override: Option<f64>,
+    use_standard_week: bool,
     reviewed: bool,
 ) -> Result<(), String> {
     let gross_for_db = response.gross_pay.unwrap_or(0.0);
@@ -270,7 +281,7 @@ async fn upsert_payroll_period(
         INSERT INTO payroll_periods
             (employee_id, week_start, week_end, total_hours, total_units_known, unit_threshold,
              base_pay, extra_unit_pay, gross_pay, status, unknown_rate_equation, needs_admin_review,
-             threshold_override, reviewed, created_at)
+             use_standard_week, reviewed, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(employee_id, week_start) DO UPDATE SET
             week_end = excluded.week_end,
@@ -283,7 +294,7 @@ async fn upsert_payroll_period(
             status = excluded.status,
             unknown_rate_equation = excluded.unknown_rate_equation,
             needs_admin_review = excluded.needs_admin_review,
-            threshold_override = excluded.threshold_override,
+            use_standard_week = excluded.use_standard_week,
             reviewed = excluded.reviewed,
             created_at = excluded.created_at
         "#,
@@ -300,7 +311,7 @@ async fn upsert_payroll_period(
     .bind(&response.status)
     .bind(&response.pay_equation)
     .bind(response.needs_admin_review as i64)
-    .bind(threshold_override)
+    .bind(use_standard_week as i64)
     .bind(reviewed as i64)
     .bind(crate::db::now_string())
     .execute(db)
@@ -363,20 +374,20 @@ pub async fn get_payroll_week(
 
     let week_start_str = req_week_start.format("%Y-%m-%d").to_string();
 
-    let (threshold_override, reviewed) =
+    let (use_standard_week, reviewed) =
         read_payroll_flags(&state.db, &employee.id, &week_start_str).await?;
     let response = compute_week(
         &state.db,
         &employee.id,
         &employee.name,
         req_week_start,
-        threshold_override,
+        use_standard_week,
         reviewed,
     )
     .await?;
 
-    // Persist payroll period (preserving any admin threshold override / review).
-    upsert_payroll_period(&state.db, &response, threshold_override, reviewed).await?;
+    // Persist payroll period (preserving any admin standard-week override / review).
+    upsert_payroll_period(&state.db, &response, use_standard_week, reviewed).await?;
 
     // Raise alerts for unresolved or outside-band (unreviewed) weeks.
     if response.status == "unresolved" {
@@ -419,7 +430,7 @@ pub async fn get_all_payroll_week(
     let mut results = Vec::new();
 
     for employee in employees {
-        let (threshold_override, reviewed) =
+        let (use_standard_week, reviewed) =
             match read_payroll_flags(&state.db, &employee.id, &week_start_str).await {
                 Ok(flags) => flags,
                 Err(_) => continue,
@@ -429,7 +440,7 @@ pub async fn get_all_payroll_week(
             &employee.id,
             &employee.name,
             req_week_start,
-            threshold_override,
+            use_standard_week,
             reviewed,
         )
         .await;
@@ -554,13 +565,9 @@ pub async fn override_payroll_proration(
     let week_start = chrono::NaiveDate::parse_from_str(week_start_str, "%Y-%m-%d")
         .map_err(|_| "Invalid week_start date format. Use YYYY-MM-DD.".to_string())?;
 
-    // accept_prorated = true  -> clear the override (use the hours-based proration)
-    // accept_prorated = false -> force the standard 180-unit threshold
-    let new_override: Option<f64> = if input.accept_prorated {
-        None
-    } else {
-        Some(STANDARD_THRESHOLD)
-    };
+    // accept_prorated = true  -> use the clocked hours (hours-based proration)
+    // accept_prorated = false -> treat the week as a standard 40-hr week
+    let use_standard_week = !input.accept_prorated;
 
     // Recompute with the admin's decision (reviewed = true so the week is final),
     // then persist it so the override/review sticks across future recomputes.
@@ -569,11 +576,11 @@ pub async fn override_payroll_proration(
         employee_id,
         &employee.name,
         week_start,
-        new_override,
+        use_standard_week,
         true,
     )
     .await?;
-    upsert_payroll_period(&state.db, &response, new_override, true).await?;
+    upsert_payroll_period(&state.db, &response, use_standard_week, true).await?;
 
     // Resolve the related proration alert (message carries the employee name).
     sqlx::query(
@@ -613,7 +620,7 @@ mod payroll_math_tests {
     #[test]
     fn below_threshold_pays_base_only() {
         // 100 lengths × 1.5 = 150 known units (< 180)
-        let math = compute_payroll(&[row("404", 100, Some(1.5), false)], 40.0, None);
+        let math = compute_payroll(&[row("404", 100, Some(1.5), false)], 40.0, false);
         close(math.total_units_known, 150.0);
         close(math.unit_threshold, 180.0);
         close(math.extra_unit_pay, 0.0);
@@ -625,7 +632,7 @@ mod payroll_math_tests {
     #[test]
     fn exactly_at_threshold_pays_base_only() {
         // 120 lengths × 1.5 = 180 known units (== threshold)
-        let math = compute_payroll(&[row("404", 120, Some(1.5), false)], 40.0, None);
+        let math = compute_payroll(&[row("404", 120, Some(1.5), false)], 40.0, false);
         close(math.total_units_known, 180.0);
         close(math.extra_unit_pay, 0.0);
         close(math.gross_pay.unwrap(), 1140.0);
@@ -635,7 +642,7 @@ mod payroll_math_tests {
     #[test]
     fn above_threshold_pays_extra_units() {
         // 200 lengths × 1.5 = 300 known units → 120 extra × $3.80
-        let math = compute_payroll(&[row("404", 200, Some(1.5), false)], 40.0, None);
+        let math = compute_payroll(&[row("404", 200, Some(1.5), false)], 40.0, false);
         close(math.total_units_known, 300.0);
         close(math.extra_unit_pay, 120.0 * 3.80);
         close(math.gross_pay.unwrap(), 1140.0 + 120.0 * 3.80);
@@ -651,7 +658,7 @@ mod payroll_math_tests {
                 row("722", 40, Some(2.0), false),
             ],
             40.0,
-            None,
+            false,
         );
         close(math.total_units_known, 230.0);
         close(math.extra_unit_pay, 50.0 * 3.80);
@@ -667,7 +674,7 @@ mod payroll_math_tests {
                 row("X1", 5, None, true),
             ],
             40.0,
-            None,
+            false,
         );
         assert_eq!(math.status, "unresolved");
         assert_eq!(math.gross_pay, None);
@@ -681,7 +688,7 @@ mod payroll_math_tests {
 
     #[test]
     fn null_unit_value_is_unknown_even_when_not_custom() {
-        let math = compute_payroll(&[row("X1", 10, None, false)], 40.0, None);
+        let math = compute_payroll(&[row("X1", 10, None, false)], 40.0, false);
         assert_eq!(math.status, "unresolved");
         assert_eq!(math.unknown_details.len(), 1);
         assert_eq!(math.unknown_details[0].quantity, 10);
@@ -695,14 +702,14 @@ mod payroll_math_tests {
                 row("404", 100, Some(1.5), false),
             ],
             40.0,
-            None,
+            false,
         );
         assert_eq!(math.pay_equation, "150 units + 15×X1 − 180 (base units)");
     }
 
     #[test]
     fn final_equation_shows_breakdown() {
-        let math = compute_payroll(&[row("404", 200, Some(1.5), false)], 40.0, None);
+        let math = compute_payroll(&[row("404", 200, Some(1.5), false)], 40.0, false);
         assert_eq!(
             math.pay_equation,
             "$1140.00 (base) + $456.00 (120 extra units × $3.80) = $1596.00"
@@ -711,51 +718,68 @@ mod payroll_math_tests {
 
     #[test]
     fn empty_week_pays_base_with_no_units() {
-        let math = compute_payroll(&[], 40.0, None);
+        let math = compute_payroll(&[], 40.0, false);
         close(math.total_units_known, 0.0);
         close(math.gross_pay.unwrap(), 1140.0);
         assert_eq!(math.status, "final");
     }
 
-    // ---- Proration (threshold = 4.5 units/hr × hours worked) ----
+    // ---- Proration (base = $28.50/hr, threshold = 4.5 units/hr × hours) ----
 
     #[test]
-    fn full_week_threshold_is_standard_180() {
-        // 40 hr × 4.5 = 180
-        let math = compute_payroll(&[row("404", 200, Some(1.5), false)], 40.0, None);
+    fn full_week_earnings_are_standard() {
+        // 40 hr → base 1140, threshold 180.
+        let math = compute_payroll(&[row("404", 200, Some(1.5), false)], 40.0, false);
+        close(math.base_pay, 1140.0);
         close(math.unit_threshold, 180.0);
     }
 
     #[test]
-    fn partial_week_prorates_threshold_down() {
-        // 4 days = 32 hr × 4.5 = 144 threshold. 200 known units → 56 extra.
-        let math = compute_payroll(&[row("404", 200, Some(1.0), false)], 32.0, None);
-        close(math.unit_threshold, 144.0);
-        close(math.total_units_known, 200.0);
-        close(math.extra_unit_pay, 56.0 * 3.80);
-        close(math.gross_pay.unwrap(), 1140.0 + 56.0 * 3.80);
+    fn base_pay_prorates_with_hours_worked() {
+        // User's example: absent 2 days → 24 hr. base = 28.50 × 24 = 684,
+        // threshold = 4.5 × 24 = 108.
+        let math = compute_payroll(&[row("404", 100, Some(1.0), false)], 24.0, false);
+        close(math.base_pay, 684.0);
+        close(math.unit_threshold, 108.0);
     }
 
     #[test]
-    fn overtime_week_prorates_threshold_up() {
-        // 48 hr × 4.5 = 216 threshold. 250 known units → 34 extra.
-        let math = compute_payroll(&[row("404", 250, Some(1.0), false)], 48.0, None);
+    fn partial_week_prorates_base_and_threshold_down() {
+        // 4 days = 32 hr. base = 28.50 × 32 = 912; threshold = 4.5 × 32 = 144.
+        // 200 known units → 56 extra.
+        let math = compute_payroll(&[row("404", 200, Some(1.0), false)], 32.0, false);
+        close(math.base_pay, 912.0);
+        close(math.unit_threshold, 144.0);
+        close(math.total_units_known, 200.0);
+        close(math.extra_unit_pay, 56.0 * 3.80);
+        close(math.gross_pay.unwrap(), 912.0 + 56.0 * 3.80);
+    }
+
+    #[test]
+    fn overtime_week_prorates_base_and_threshold_up() {
+        // 48 hr. base = 28.50 × 48 = 1368; threshold = 4.5 × 48 = 216.
+        // 250 known units → 34 extra.
+        let math = compute_payroll(&[row("404", 250, Some(1.0), false)], 48.0, false);
+        close(math.base_pay, 1368.0);
         close(math.unit_threshold, 216.0);
         close(math.extra_unit_pay, 34.0 * 3.80);
     }
 
     #[test]
-    fn zero_hours_gives_zero_threshold_all_units_extra() {
-        // No clock data → threshold 0, every known unit is extra.
-        let math = compute_payroll(&[row("404", 100, Some(1.0), false)], 0.0, None);
+    fn zero_hours_gives_zero_base_and_threshold_all_units_extra() {
+        // No clock data → base 0, threshold 0, every known unit is extra.
+        let math = compute_payroll(&[row("404", 100, Some(1.0), false)], 0.0, false);
+        close(math.base_pay, 0.0);
         close(math.unit_threshold, 0.0);
         close(math.extra_unit_pay, 100.0 * 3.80);
     }
 
     #[test]
-    fn threshold_override_forces_standard() {
-        // 32 hr would prorate to 144, but an admin override forces 180.
-        let math = compute_payroll(&[row("404", 200, Some(1.0), false)], 32.0, Some(180.0));
+    fn standard_week_override_forces_full_week_pay() {
+        // Admin overrides a short week to standard: prorate by 40 hr regardless
+        // of clocked hours → base 1140, threshold 180. 200 units → 20 extra.
+        let math = compute_payroll(&[row("404", 200, Some(1.0), false)], STANDARD_WEEK_HOURS, true);
+        close(math.base_pay, 1140.0);
         close(math.unit_threshold, 180.0);
         close(math.extra_unit_pay, 20.0 * 3.80); // 200 - 180
         assert!(math.threshold_note.contains("admin override"));

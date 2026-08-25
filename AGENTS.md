@@ -188,22 +188,30 @@ Implemented in `fingerprint.rs`:
 Implemented in `src-tauri/src/commands/payroll.rs` (pure, DB-free math in
 `compute_payroll`, fully unit-tested).
 
-- **Base pay** is a flat `$1140`/week. The first `threshold` made units are
-  included in base pay; each unit above earns **$3.80**.
+- **Base pay** is **`$28.50/hour`** — it prorates with hours worked. A full
+  40-hr week earns `40 × $28.50 = $1140`; a 24-hr week earns `$684`.
 - **Proration rule**: a worker makes **36 units/day = 4.5 units/hour** (the
-  "magic number"). The base-unit threshold for a week is
-  `4.5 × hours_worked`. A full 40-hr week → `4.5 × 40 = 180` (the standard
-  threshold). A 4-day (32-hr) week → `4.5 × 32 = 144`; anything above 144 is
-  extra. Overtime scales the threshold up the same way.
-- **Review band**: a week whose hours fall outside **39–41** has an unusual
-  proration and is flagged `status = "review"` + a yellow `payroll_proration`
-  alert (deduped per employee+week) so an admin can verify it.
+  "magic number"). To earn the base rate you must average that many units per
+  hour. Both base pay and the base-unit threshold scale linearly with hours:
+  - `base_pay = $28.50 × hours_worked`
+  - `threshold = 4.5 × hours_worked`
+  A full 40-hr week → base `$1140`, threshold `180`. A 4-day (32-hr) week →
+  base `$912`, threshold `144`. Overtime scales both up the same way.
+- **Extra units**: units are tallied for the whole week. The first
+  `threshold` units are covered by base pay; each unit above earns **$3.80**.
+  `gross = base_pay + extra_units × $3.80`.
+- **Review band**: a week whose clocked hours fall outside **39–41** has an
+  unusual proration and is flagged `status = "review"` + a yellow
+  `payroll_proration` alert (deduped per employee+week) so an admin can verify
+  the hours.
 - **Admin actions** (Payroll panel, only shown for `review` weeks):
-  - *Accept Prorated* → keep the hours-based threshold, mark the week reviewed.
-  - *Use Standard 180* → force the threshold to 180, mark the week reviewed.
-  - Both persist via `payroll_periods.threshold_override` (NULL = use proration,
-    `180` = forced standard) and `payroll_periods.reviewed` (1 = admin approved),
-    so the decision sticks across recomputes.
+  - *Accept Prorated* → keep the clocked-hours proration (base pay + threshold),
+    mark the week reviewed.
+  - *Use Standard 180* → treat the week as a standard **40-hr** week (base
+    `$1140`, threshold `180`) regardless of clocked hours, mark it reviewed.
+  - Both persist via `payroll_periods.use_standard_week` (0 = prorate by clocked
+    hours, 1 = force standard week) and `payroll_periods.reviewed` (1 = admin
+    approved), so the decision sticks across recomputes.
 - **Unknown rates** (custom/missing unit value) always make a week `unresolved`
   (red alert) and take precedence over the review band; resolved via
   `resolve_unknown_rate`.
@@ -237,7 +245,7 @@ Use these when validating expected UX/progress wording and subprocess behavior.
 ```bash
 cd src-tauri
 cargo check
-cargo test          # 33 Rust tests (db, backup, payroll math + proration, search, storage)
+cargo test          # 34 Rust tests (db, backup, payroll math + proration, search, storage)
 cargo build --release
 ```
 
