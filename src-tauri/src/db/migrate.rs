@@ -505,6 +505,27 @@ pub(crate) async fn run_data_migrations(db: &SqlitePool) -> Result<()> {
     )
     .await?;
 
+    // 2b. payroll_periods proration controls. `threshold_override` lets an admin
+    //     force a specific base-unit threshold (e.g. the standard 180) instead of
+    //     the hours-based proration; `reviewed` records that an admin has already
+    //     approved the week so it is not re-flagged for review.
+    alter_if_missing(
+        db,
+        "add_threshold_override_to_payroll_periods",
+        "payroll_periods",
+        "threshold_override",
+        "ALTER TABLE payroll_periods ADD COLUMN threshold_override REAL",
+    )
+    .await?;
+    alter_if_missing(
+        db,
+        "add_reviewed_to_payroll_periods",
+        "payroll_periods",
+        "reviewed",
+        "ALTER TABLE payroll_periods ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+
     // 3. mould_locations table + fixed seed locations
     sqlx::query(
         r#"
