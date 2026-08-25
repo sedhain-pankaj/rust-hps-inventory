@@ -279,6 +279,19 @@ pub async fn save_mould_location_column(
         if name.is_empty() {
             return Err("Column name is required.".to_string());
         }
+        // Verify the column belongs to this location before renaming, so a
+        // mismatched location_id can't silently rename a column elsewhere.
+        let belongs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM mould_location_columns WHERE id = ? AND location_id = ?",
+        )
+        .bind(id)
+        .bind(input.location_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(to_string)?;
+        if belongs == 0 {
+            return Err("Column not found in this location.".to_string());
+        }
         sqlx::query("UPDATE mould_location_columns SET name = ? WHERE id = ?")
             .bind(&name)
             .bind(id)
