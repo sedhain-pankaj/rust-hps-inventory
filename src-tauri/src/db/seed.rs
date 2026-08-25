@@ -434,7 +434,7 @@ mod tests {
     use super::super::migrate::{migrate, run_column_migrations, run_data_migrations, run_cornice_unit_migrations};
     use super::super::util::now_string;
     use super::*;
-    use sqlx::sqlite::{SqlitePoolOptions, SqlitePool};
+    use sqlx::sqlite::SqlitePool;
 
 async fn fresh_pool() -> SqlitePool {
         sqlx::sqlite::SqlitePoolOptions::new()

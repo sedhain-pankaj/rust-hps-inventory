@@ -386,8 +386,8 @@ pub async fn migrate(db: &SqlitePool) -> Result<()> {
             week_end TEXT NOT NULL,
             total_hours REAL NOT NULL DEFAULT 0,
             total_units_known REAL NOT NULL DEFAULT 0,
-            unit_threshold REAL NOT NULL DEFAULT 180,
-            base_pay REAL NOT NULL DEFAULT 1140.0,
+            unit_threshold REAL NOT NULL DEFAULT 0,
+            base_pay REAL NOT NULL DEFAULT 0.0,
             extra_unit_pay REAL NOT NULL DEFAULT 0.0,
             gross_pay REAL NOT NULL DEFAULT 0.0,
             status TEXT NOT NULL DEFAULT 'pending',
@@ -790,7 +790,7 @@ async fn log_migration(db: &SqlitePool, migration_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::{SqlitePoolOptions, SqlitePool};
+    use sqlx::sqlite::SqlitePool;
 
 async fn fresh_pool() -> SqlitePool {
         sqlx::sqlite::SqlitePoolOptions::new()
