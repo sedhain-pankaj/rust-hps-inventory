@@ -85,7 +85,13 @@ export async function renderAboutPanel() {
       </div>
     `,
   );
-  app.querySelector("[data-refresh]").addEventListener("click", renderAboutPanel);
+  app.querySelector("[data-refresh]").addEventListener("click", async () => {
+    try {
+      await renderAboutPanel();
+    } catch (error) {
+      await alertModal({ title: "About", message: `Failed to refresh: ${error.message || error}` });
+    }
+  });
   app.querySelector("[data-backup-now]").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     setBusy(button);

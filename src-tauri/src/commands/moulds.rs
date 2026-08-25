@@ -118,13 +118,51 @@ pub async fn save_mould_location(
     if name.is_empty() {
         return Err("Location name is required.".to_string());
     }
+    // Reject duplicate names (case-insensitive): the UI groups moulds by name and
+    // the delete guard matches by name, so two locations sharing a name conflate.
+    // id != 0 is a no-op for new locations (AUTOINCREMENT starts at 1) and excludes
+    // the row itself on rename.
+    let dup: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM mould_locations WHERE name = ? COLLATE NOCASE AND id != ?)",
+    )
+    .bind(&name)
+    .bind(input.id.unwrap_or(0))
+    .fetch_one(&state.db)
+    .await
+    .map_err(to_string)?;
+    if dup {
+        return Err("A location with that name already exists.".to_string());
+    }
     if let Some(id) = input.id {
+        // Fetch the old name so the denormalized storage_location on unassigned
+        // moulds (column_id IS NULL) stays in sync with the rename — otherwise
+        // they display as "Unassigned" and the delete guard undercounts them.
+        let old_name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM mould_locations WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(to_string)?;
         sqlx::query("UPDATE mould_locations SET name = ? WHERE id = ?")
             .bind(&name)
             .bind(id)
             .execute(&state.db)
             .await
             .map_err(to_string)?;
+        if let Some(old) = old_name {
+            if old != name {
+                sqlx::query(
+                    "UPDATE mould_inventory SET storage_location = ? \
+                     WHERE column_id IS NULL AND storage_location = ?",
+                )
+                .bind(&name)
+                .bind(&old)
+                .execute(&state.db)
+                .await
+                .map_err(to_string)?;
+            }
+        }
         let row = sqlx::query("SELECT id, name, sort_order FROM mould_locations WHERE id = ?")
             .bind(id)
             .fetch_one(&state.db)

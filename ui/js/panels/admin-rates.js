@@ -10,6 +10,49 @@ let ratesStore = null;
 export async function renderRatesPanel() {
   const rates = await invoke("list_cornice_rates");
   const filter = state.ratesFilter || "";
+  // The search box lives in its own container so live filtering (renderRatesContent)
+  // doesn't re-mount it — re-mounting on every keystroke dropped focus and killed
+  // the results dropdown.
+  setPanel("Cornice Rates", "", `<div data-rates-search></div><div data-rates-content></div>`);
+
+  ratesStore = createTableStore({
+    commit: {
+      add: (values) => invoke("save_cornice_rate", { input: { id: null, ...values } }),
+      save: (values) => invoke("save_cornice_rate", { input: values }),
+      remove: (id) => invoke("delete_cornice_rate", { id }),
+    },
+    onDone: () => {
+      ratesStore = null;
+      renderRatesPanel();
+    },
+  });
+
+  const searchBox = mountSearchBox(app.querySelector("[data-rates-search]"), {
+    placeholder: "Search by cornice name…",
+    minChars: 1,
+    searchFn: (query) => rates.filter((rate) => matchesQuery(rate.model, query)),
+    renderMatch: (rate) =>
+      `${escapeHtml(rate.series ? `${rate.series} · ` : "")}${escapeHtml(rate.model)}<span class="search-result-meta">${escapeHtml(rate.unit || "Custom")}</span>`,
+    onQuery: (query) => {
+      if (query === (state.ratesFilter || "")) return;
+      state.ratesFilter = query;
+      renderRatesContent(rates);
+    },
+    onSelect: (rate) => {
+      state.ratesFilter = rate.model;
+      renderRatesContent(rates);
+    },
+  });
+  if (filter) searchBox.setQuery(filter, { trigger: false });
+
+  renderRatesContent(rates);
+}
+
+function renderRatesContent(rates) {
+  const store = ratesStore;
+  const contentEl = app.querySelector("[data-rates-content]");
+  if (!store || !contentEl) return;
+  const filter = state.ratesFilter || "";
   const visible = filter ? rates.filter((rate) => matchesQuery(rate.model, filter)) : rates;
   const groups = {};
   for (const rate of visible) {
@@ -22,19 +65,16 @@ export async function renderRatesPanel() {
     : rates.length
       ? []
       : ["New series"];
-  setPanel(
-    "Cornice Rates",
-    "",
-    `
-      <div data-rates-search></div>
-      ${
-        filter
-          ? `<div class="message" style="margin-bottom:12px">${visible.length} of ${rates.length} rates match "${escapeHtml(filter)}"</div>`
-          : ""
-      }
-      ${
-        displaySeriesNames.length
-          ? `<div class="rate-series-layout">
+
+  contentEl.innerHTML = `
+    ${
+      filter
+        ? `<div class="message" style="margin-bottom:12px">${visible.length} of ${rates.length} rates match "${escapeHtml(filter)}"</div>`
+        : ""
+    }
+    ${
+      displaySeriesNames.length
+        ? `<div class="rate-series-layout">
       ${displaySeriesNames
         .map(
           (series) => `
@@ -48,28 +88,15 @@ export async function renderRatesPanel() {
         )
         .join("")}
       </div>`
-          : `<div class="empty">No rates match "${escapeHtml(filter)}".</div>`
-      }
-    `,
-  );
+        : `<div class="empty">No rates match "${escapeHtml(filter)}".</div>`
+    }
+  `;
 
-  ratesStore = createTableStore({
-    commit: {
-      add: (values) => invoke("save_cornice_rate", { input: { id: null, ...values } }),
-      save: (values) => invoke("save_cornice_rate", { input: values }),
-      remove: (id) => invoke("delete_cornice_rate", { id }),
-    },
-    onDone: () => {
-      ratesStore = null;
-      renderRatesPanel();
-    },
-  });
-  const store = ratesStore;
   const actionsEl = app.querySelector("[data-panel-actions]");
   const mounted = {};
   displaySeriesNames.forEach((series) => {
     mounted[series] = mountRatesCardGrid(
-      app.querySelector(`[data-rate-group="${CSS.escape(series)}"]`),
+      contentEl.querySelector(`[data-rate-group="${CSS.escape(series)}"]`),
       store,
       {
         rows: groups[series] || [],
@@ -83,7 +110,7 @@ export async function renderRatesPanel() {
   });
   store.renderActions(actionsEl, { refreshFn: renderRatesPanel });
 
-  app.querySelectorAll("[data-rate-add]").forEach((btn) => {
+  contentEl.querySelectorAll("[data-rate-add]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const series = btn.dataset.series;
       openRateAddModal(series, (values) => {
@@ -94,24 +121,6 @@ export async function renderRatesPanel() {
     });
   });
   ensureRateMenuListener();
-
-  const searchBox = mountSearchBox(app.querySelector("[data-rates-search]"), {
-    placeholder: "Search by cornice name…",
-    minChars: 1,
-    searchFn: (query) => rates.filter((rate) => matchesQuery(rate.model, query)),
-    renderMatch: (rate) =>
-      `${escapeHtml(rate.series ? `${rate.series} · ` : "")}${escapeHtml(rate.model)}<span class="search-result-meta">${escapeHtml(rate.unit || "Custom")}</span>`,
-    onQuery: (query) => {
-      if (query === (state.ratesFilter || "")) return;
-      state.ratesFilter = query;
-      renderRatesPanel();
-    },
-    onSelect: (rate) => {
-      state.ratesFilter = rate.model;
-      renderRatesPanel();
-    },
-  });
-  if (filter) searchBox.setQuery(filter, { trigger: false });
 }
 
 let rateMenuListenerAdded = false;

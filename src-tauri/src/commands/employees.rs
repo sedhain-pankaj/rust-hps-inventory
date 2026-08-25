@@ -249,7 +249,7 @@ pub async fn start_fingerprint_auth(
                 }
             };
             if should_cancel {
-                fingerprint::kill_orphaned_helpers(&active_pids);
+                fingerprint::kill_orphaned_helpers(&active_pids).await;
                 return;
             }
         }
@@ -379,7 +379,7 @@ pub async fn cancel_fingerprint_auth(
     state: State<'_, AppState>,
     job_id: String,
 ) -> CommandResult<String> {
-    fingerprint::kill_orphaned_helpers(&state.active_helper_pids);
+    fingerprint::kill_orphaned_helpers(&state.active_helper_pids).await;
     if let Ok(mut jobs) = state.auth_jobs.lock() {
         if let Some(job) = jobs.get_mut(&job_id) {
             if !job.done {
@@ -442,14 +442,15 @@ pub async fn start_fingerprint_enroll(
 
         // Check cancellation before starting enrollment. Handle a poisoned lock
         // gracefully (skip the check) like the other lock sites, instead of
-        // panicking and leaving the job stuck `running` forever.
-        if let Ok(guard) = jobs.lock() {
-            if let Some(job) = guard.get(&job_id_for_task) {
-                if job.done {
-                    fingerprint::kill_orphaned_helpers(&active_pids);
-                    return;
-                }
-            }
+        // panicking and leaving the job stuck `running` forever. Read the flag
+        // and drop the guard before awaiting (a MutexGuard can't cross an await).
+        let was_cancelled = match jobs.lock() {
+            Ok(guard) => guard.get(&job_id_for_task).is_some_and(|job| job.done),
+            Err(_) => false,
+        };
+        if was_cancelled {
+            fingerprint::kill_orphaned_helpers(&active_pids).await;
+            return;
         }
 
         let result = fingerprint::enroll_employee(
@@ -542,11 +543,11 @@ pub async fn poll_fingerprint_enroll(
 }
 
 #[tauri::command]
-pub fn cancel_fingerprint_enroll(
+pub async fn cancel_fingerprint_enroll(
     state: State<'_, AppState>,
     job_id: String,
 ) -> CommandResult<()> {
-    fingerprint::kill_orphaned_helpers(&state.active_helper_pids);
+    fingerprint::kill_orphaned_helpers(&state.active_helper_pids).await;
     if let Ok(mut jobs) = state.enroll_jobs.lock() {
         if let Some(job) = jobs.get_mut(&job_id) {
             if !job.done {
@@ -560,8 +561,8 @@ pub fn cancel_fingerprint_enroll(
 }
 
 #[tauri::command]
-pub fn kill_fingerprint_helpers(state: State<'_, AppState>) -> CommandResult<()> {
-    fingerprint::kill_orphaned_helpers(&state.active_helper_pids);
+pub async fn kill_fingerprint_helpers(state: State<'_, AppState>) -> CommandResult<()> {
+    fingerprint::kill_orphaned_helpers(&state.active_helper_pids).await;
     Ok(())
 }
 

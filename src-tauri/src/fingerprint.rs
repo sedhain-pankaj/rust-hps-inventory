@@ -75,7 +75,7 @@ pub fn find_helper_binary(paths: &AppPaths) -> Option<PathBuf> {
 
 /// Kill any previously tracked helper processes that may still be running
 /// and holding the USB device. Called before each new fingerprint operation.
-pub fn kill_orphaned_helpers(active_pids: &ActivePids) {
+pub async fn kill_orphaned_helpers(active_pids: &ActivePids) {
     let pids_to_kill = {
         let guard = active_pids.lock().unwrap();
         guard.iter().copied().collect::<Vec<u32>>()
@@ -85,7 +85,8 @@ pub fn kill_orphaned_helpers(active_pids: &ActivePids) {
         #[cfg(unix)]
         unsafe {
             let _ = libc::kill(pid as i32, libc::SIGTERM);
-            thread::sleep(Duration::from_millis(100));
+            // Async sleep so we don't block a tokio worker thread.
+            tokio::time::sleep(Duration::from_millis(100)).await;
             let _ = libc::kill(pid as i32, libc::SIGKILL);
         }
         #[cfg(not(unix))]
@@ -107,7 +108,7 @@ pub async fn identify_employee(
     active_pids: &ActivePids,
     filter: &TemplateFilter,
 ) -> Result<String> {
-    kill_orphaned_helpers(active_pids);
+    kill_orphaned_helpers(active_pids).await;
     export_templates(db, paths, filter).await?;
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
@@ -197,7 +198,7 @@ pub async fn enroll_employee(
     on_line: Option<Arc<dyn Fn(String) + Send + Sync>>,
     active_pids: &ActivePids,
 ) -> Result<Vec<String>> {
-    kill_orphaned_helpers(active_pids);
+    kill_orphaned_helpers(active_pids).await;
     let helper = find_helper_binary(paths).ok_or_else(helper_missing_error)?;
     let storage = paths.fingerprint_dir.clone();
     fs::create_dir_all(&storage).context("Could not create fingerprint storage")?;
@@ -229,8 +230,8 @@ pub async fn enroll_employee(
 
     let lines = match &lines_raw {
         Err(e) if e.to_string().to_ascii_lowercase().contains("resource busy") => {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            kill_orphaned_helpers(active_pids);
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            kill_orphaned_helpers(active_pids).await;
             let helper_r = helper.clone();
             let source_r = paths.source_root.clone();
             let args_r = args.clone();
