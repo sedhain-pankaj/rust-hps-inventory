@@ -5,7 +5,7 @@ import { createTableStore, mountInlineTable } from "../table.js";
 import { mountRatesCardGrid } from "../rates-cards.js";
 import { mountSearchBox, matchesQuery } from "../search.js";
 import { app, state, setPanel, table, shiftIso, parsePrevValues, corniceLogCellHtml } from "../core.js";
-import { mouldsInLocation } from "./admin-moulds.js";
+import { mouldBoardHtml } from "./admin-moulds.js";
 
 export async function renderStaffClock(message = "") {
   const [events, status] = await Promise.all([
@@ -522,33 +522,16 @@ export async function renderStaffMouldView() {
     invoke("list_mould_location_columns"),
     invoke("list_mould_inventory"),
   ]);
-  const columnsFor = (locationId) => columns.filter((col) => col.location_id === locationId);
   const filter = state.staffMouldFilter || "";
   const visibleItems = filter ? items.filter((item) => matchesQuery(item.mould_name, filter)) : items;
-  const boxes = locations
-    .map((loc) => {
-      const locItems = mouldsInLocation(loc, columns, visibleItems);
-      const colCards = columnsFor(loc.id)
-        .map((col) => {
-          const colItems = visibleItems.filter((item) => item.column_id === col.id);
-          return `
-            <div class="mould-column-card">
-              <h4><span>${escapeHtml(col.name)}</span></h4>
-              <div class="mould-slots">
-                ${colItems
-                  .map((item) => `<div class="mould-slot"><span>${escapeHtml(item.mould_name)}</span></div>`)
-                  .join("")}
-              </div>
-            </div>`;
-        })
-        .join("");
-      return `
-        <div class="day-box">
-          <h3><span>${escapeHtml(loc.name)} <small>(${locItems.length})</small></span></h3>
-          <div class="mould-columns">${colCards}</div>
-        </div>`;
-    })
-    .join("");
+  const boxes = mouldBoardHtml({
+    locations,
+    columns,
+    visibleItems,
+    columnHeader: (col) => `<span>${escapeHtml(col.name)}</span>`,
+    slot: (item) => `<div class="mould-slot"><span>${escapeHtml(item.mould_name)}</span></div>`,
+    locationHeader: (loc, count) => `<span>${escapeHtml(loc.name)} <small>(${count})</small></span>`,
+  });
   const unmatched = visibleItems.filter((item) => item.column_id == null);
   const unassigned = unmatched.length
     ? `<div class="day-box"><h3><span>Unassigned</span></h3>${table(

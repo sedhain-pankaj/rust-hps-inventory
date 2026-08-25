@@ -15,6 +15,46 @@ export function mouldsInLocation(loc, columns, items) {
   );
 }
 
+// Shared board skeleton (location boxes -> column cards -> mould slots) used by
+// both the admin (editable) and staff (read-only) mould views. View-specific
+// bits — delete buttons, add forms, location actions — are injected via the
+// columnHeader / slot / slotForm / locationHeader callbacks.
+export function mouldBoardHtml({
+  locations,
+  columns,
+  visibleItems,
+  columnHeader,
+  slot,
+  slotForm = null,
+  locationHeader,
+}) {
+  const columnsFor = (locationId) => columns.filter((col) => col.location_id === locationId);
+  return locations
+    .map((loc) => {
+      const locItems = mouldsInLocation(loc, columns, visibleItems);
+      const locCols = columnsFor(loc.id);
+      const colCards = locCols
+        .map((col) => {
+          const colItems = visibleItems.filter((item) => item.column_id === col.id);
+          return `
+            <div class="mould-column-card">
+              <h4>${columnHeader(col, loc, locCols)}</h4>
+              <div class="mould-slots">
+                ${colItems.map((item) => slot(item)).join("")}
+                ${slotForm ? slotForm(col) : ""}
+              </div>
+            </div>`;
+        })
+        .join("");
+      return `
+        <div class="day-box">
+          <h3>${locationHeader(loc, locItems.length)}</h3>
+          <div class="mould-columns">${colCards}</div>
+        </div>`;
+    })
+    .join("");
+}
+
 export async function renderMouldLocationsPanel() {
   const [locations, columns, items] = await Promise.all([
     invoke("list_mould_locations"),
@@ -33,62 +73,42 @@ export async function renderMouldLocationsPanel() {
     return item.storage_location || "Unassigned";
   };
 
-  const boxes = locations
-    .map((loc) => {
-      const locItems = mouldsInLocation(loc, columns, visibleItems);
-      const locCols = columnsFor(loc.id);
+  const boxes = mouldBoardHtml({
+    locations,
+    columns,
+    visibleItems,
+    columnHeader: (col, loc, locCols) => {
       const lastColId = locCols.length ? locCols[locCols.length - 1].id : null;
-       const colCards = locCols
-        .map((col) => {
-          const colItems = visibleItems.filter((item) => item.column_id === col.id);
-          const actualCount = items.filter((item) => item.column_id === col.id).length;
-          const isLast = col.id === lastColId;
-          const isOnly = locCols.length === 1;
-          const delTitle = isOnly
-            ? "A location must keep at least one column"
-            : isLast
-              ? actualCount
-                ? `Delete column (moves ${actualCount} mould(s) to Unassigned)`
-                : "Delete column"
-              : "Only the last column can be deleted (delete from the end)";
-          const delBtn = isOnly
-            ? ""
-            : `<button class="icon ghost" data-del-col="${col.id}" title="${escapeHtml(delTitle)}"${isLast ? "" : " disabled"}>${icon("trash", 14)}</button>`;
-          return `
-            <div class="mould-column-card">
-              <h4>
-                <span>${escapeHtml(col.name)}</span>
-                ${delBtn}
-              </h4>
-              <div class="mould-slots">
-                ${colItems
-                  .map(
-                    (item) => `
-                    <div class="mould-slot">
-                      <span>${escapeHtml(item.mould_name)}</span>
-                      <button class="icon ghost" data-del-mould="${item.id}" title="Delete mould">${icon("x", 14)}</button>
-                    </div>`,
-                  )
-                  .join("")}
-                <form class="mould-slot-form" data-add-form="${col.id}">
-                  <input name="mould_name" placeholder="Mould name" autocomplete="off" />
-                </form>
-              </div>
-            </div>`;
-        })
-        .join("");
-      return `
-        <div class="day-box">
-          <h3>
-            <span>${escapeHtml(loc.name)} <small>(${locItems.length})</small></span>
-            <span style="display:flex;gap:8px">
-              <button class="ghost" data-add-col="${loc.id}" style="min-height:36px">${icon("plus", 16)} Add Column</button>
-            </span>
-          </h3>
-          <div class="mould-columns">${colCards}</div>
-        </div>`;
-    })
-    .join("");
+      const actualCount = items.filter((item) => item.column_id === col.id).length;
+      const isLast = col.id === lastColId;
+      const isOnly = locCols.length === 1;
+      const delTitle = isOnly
+        ? "A location must keep at least one column"
+        : isLast
+          ? actualCount
+            ? `Delete column (moves ${actualCount} mould(s) to Unassigned)`
+            : "Delete column"
+          : "Only the last column can be deleted (delete from the end)";
+      const delBtn = isOnly
+        ? ""
+        : `<button class="icon ghost" data-del-col="${col.id}" title="${escapeHtml(delTitle)}"${isLast ? "" : " disabled"}>${icon("trash", 14)}</button>`;
+      return `<span>${escapeHtml(col.name)}</span>${delBtn}`;
+    },
+    slot: (item) => `
+      <div class="mould-slot">
+        <span>${escapeHtml(item.mould_name)}</span>
+        <button class="icon ghost" data-del-mould="${item.id}" title="Delete mould">${icon("x", 14)}</button>
+      </div>`,
+    slotForm: (col) => `
+      <form class="mould-slot-form" data-add-form="${col.id}">
+        <input name="mould_name" placeholder="Mould name" autocomplete="off" />
+      </form>`,
+    locationHeader: (loc, count) => `
+      <span>${escapeHtml(loc.name)} <small>(${count})</small></span>
+      <span style="display:flex;gap:8px">
+        <button class="ghost" data-add-col="${loc.id}" style="min-height:36px">${icon("plus", 16)} Add Column</button>
+      </span>`,
+  });
   const unmatched = visibleItems.filter((item) => item.column_id == null);
   const unassigned = unmatched.length
     ? `
