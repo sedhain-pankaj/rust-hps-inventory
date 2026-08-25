@@ -117,7 +117,9 @@ pub async fn search_cornice_rates(
             let distance = levenshtein(&model_lower, &query);
             let max_distance = (query.len() / 3).max(1);
             if distance <= max_distance {
-                (150 - (distance as u32) * 40).max(10)
+                // distance >= 4 would underflow (150 - 160); saturate to the
+                // minimum typo score of 10 instead.
+                150u32.saturating_sub((distance as u32) * 40).max(10)
             } else {
                 0
             }
@@ -161,6 +163,7 @@ pub(crate) async fn find_rate_for_model(
         SELECT id, series, model, unit
         FROM cornice_rates
         WHERE lower(model) = lower(?)
+        ORDER BY id
         LIMIT 1
         "#,
     )

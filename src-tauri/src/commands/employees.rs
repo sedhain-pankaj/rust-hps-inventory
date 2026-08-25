@@ -440,9 +440,10 @@ pub async fn start_fingerprint_enroll(
             }
         });
 
-        // Check cancellation before starting enrollment
-        {
-            let guard = jobs.lock().unwrap();
+        // Check cancellation before starting enrollment. Handle a poisoned lock
+        // gracefully (skip the check) like the other lock sites, instead of
+        // panicking and leaving the job stuck `running` forever.
+        if let Ok(guard) = jobs.lock() {
             if let Some(job) = guard.get(&job_id_for_task) {
                 if job.done {
                     fingerprint::kill_orphaned_helpers(&active_pids);

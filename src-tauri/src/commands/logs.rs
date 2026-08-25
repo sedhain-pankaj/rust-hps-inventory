@@ -707,6 +707,16 @@ pub async fn edit_clock_event(
     if field == "action" && !["clock_in", "clock_out"].contains(&new_val.as_str()) {
         return Err("Action must be 'clock_in' or 'clock_out'.".to_string());
     }
+    // Validate timestamp / work_date so a malformed value can't silently drop
+    // the event from all hour math (parse_timestamp would fail on it).
+    if field == "timestamp" && parse_timestamp(&new_val).is_none() {
+        return Err("Timestamp must be in YYYY-MM-DDTHH:MM:SS format.".to_string());
+    }
+    if field == "work_date"
+        && chrono::NaiveDate::parse_from_str(&new_val, "%Y-%m-%d").is_err()
+    {
+        return Err("Work date must be in YYYY-MM-DD format.".to_string());
+    }
 
     // Perform the update
     let assignments = format!("{} = ?", field);
@@ -993,8 +1003,12 @@ pub(crate) async fn refresh_attendance_issues(db: &sqlx::SqlitePool) -> CommandR
         if !existing {
             let employee_name: String = row.get("employee_name");
             let work_date: String = row.get("work_date");
+            // Preserve any existing note (e.g. "Repeated clock-in") instead of
+            // clobbering it with the fixed missing-clock-out message.
             sqlx::query(
-                "UPDATE time_clock_events SET needs_admin_review = 1, note = 'Clock-out missing; admin review required.' WHERE id = ?",
+                "UPDATE time_clock_events SET needs_admin_review = 1, \
+                 note = CASE WHEN note IS NULL OR note = '' THEN 'Clock-out missing; admin review required.' ELSE note END \
+                 WHERE id = ?",
             )
             .bind(id)
             .execute(db)

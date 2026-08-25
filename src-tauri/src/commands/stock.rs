@@ -42,6 +42,12 @@ pub async fn save_stock_item(
     if input.model.trim().is_empty() {
         return Err("Model is required.".to_string());
     }
+    if input.stock < 0 {
+        return Err("Stock cannot be negative.".to_string());
+    }
+    if input.reserved < 0 {
+        return Err("Reserved cannot be negative.".to_string());
+    }
     let now = crate::db::now_string();
     let id = if let Some(id) = input.id {
         sqlx::query(

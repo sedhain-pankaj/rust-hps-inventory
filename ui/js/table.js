@@ -72,19 +72,33 @@ export function createTableStore({ commit, onDone }) {
     drafts.clear();
   }
 
+  function draftKeyOf(draft) {
+    return draft.row.id != null ? `id-${draft.row.id}` : draft.row.__key;
+  }
+
   async function saveAll() {
     const pending = pendingDrafts();
     if (!pending.length) return;
+    // Commit one-by-one and drop each draft from the store as it succeeds, so a
+    // failed batch can be retried without re-committing rows that already saved
+    // (which would hit UNIQUE violations for new rows).
+    let failed = null;
     for (const draft of pending) {
-      if (draft.deleted) {
-        if (draft.row.id != null) await commit.remove(draft.row.id);
-      } else if (draft.isNew) {
-        await commit.add(draft.values);
-      } else {
-        await commit.save({ ...draft.row, ...draft.values });
+      try {
+        if (draft.deleted) {
+          if (draft.row.id != null) await commit.remove(draft.row.id);
+        } else if (draft.isNew) {
+          await commit.add(draft.values);
+        } else {
+          await commit.save({ ...draft.row, ...draft.values });
+        }
+        drafts.delete(draftKeyOf(draft));
+      } catch (error) {
+        failed = error;
+        break;
       }
     }
-    drafts.clear();
+    if (failed) throw failed;
     if (onDone) await onDone();
   }
 

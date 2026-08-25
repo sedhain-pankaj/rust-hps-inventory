@@ -57,7 +57,7 @@ function renderEmployeeForm(employees) {
       <form class="form-grid" data-employee-form>
         <div class="form-section">
           <h3 class="form-section-title">Details</h3>
-          <label><span>Employee ID<span class="req">*</span></span><input name="id" required data-employee-id value="${escapeHtml(selected.id)}" /><span class="field-error" data-id-error></span></label>
+          <label><span>Employee ID<span class="req">*</span></span><input name="id" required data-employee-id value="${escapeHtml(selected.id)}" ${isNew ? "" : "readonly"} /><span class="field-error" data-id-error></span>${isNew ? "" : '<span class="field-hint">ID is locked after creation — it ties the fingerprint, payroll, and clock history.</span>'}</label>
           <label><span>Name<span class="req">*</span></span><input name="name" required value="${escapeHtml(selected.name)}" /></label>
           <label><span>Password${isNew ? '<span class="req">*</span>' : ""}</span><input name="password" type="password" ${isNew ? 'required placeholder="Type your password"' : ""} autocomplete="new-password" />${isNew ? "" : '<span class="field-hint">Leave this field empty to keep current password</span>'}</label>
           <label><span>Confirm Password${isNew ? '<span class="req">*</span>' : ""}</span><input name="confirm_password" type="password" ${isNew ? "required" : ""} autocomplete="new-password" /></label>
