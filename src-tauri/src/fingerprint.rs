@@ -16,9 +16,9 @@ use crate::db::{now_string, AppPaths};
 
 const HELPER_ENV: &str = "HPS_FINGERPRINT_HELPER";
 const BUNDLED_HELPER: &[u8] =
-    include_bytes!("../../libfprint-CS9711/build/examples/employee-clock-helper");
+    include_bytes!("../../libfprint-uru4500/build/examples/employee-clock-helper");
 const BUNDLED_LIBFPRINT: &[u8] =
-    include_bytes!("../../libfprint-CS9711/build/libfprint/libfprint-2.so.2.0.0");
+    include_bytes!("../../libfprint-uru4500/build/libfprint/libfprint-2.so.2.0.0");
 
 type ActivePids = Arc<Mutex<HashSet<u32>>>;
 
@@ -53,13 +53,13 @@ pub fn find_helper_binary(paths: &AppPaths) -> Option<PathBuf> {
             .join("employee-clock-helper"),
         paths
             .source_root
-            .join("libfprint-CS9711")
+            .join("libfprint-uru4500")
             .join("build")
             .join("examples")
             .join("employee-clock-helper"),
         paths
             .source_root
-            .join("libfprint-CS9711")
+            .join("libfprint-uru4500")
             .join("builddir")
             .join("examples")
             .join("employee-clock-helper"),
@@ -513,7 +513,7 @@ fn helper_timeout_seconds() -> u64 {
 
 fn helper_missing_error() -> anyhow::Error {
     anyhow!(
-        "Fingerprint helper was not found. Build or bundle libfprint-CS9711/examples/employee-clock-helper, or set {HELPER_ENV}."
+        "Fingerprint helper was not found. Build or bundle libfprint-uru4500/examples/employee-clock-helper, or set {HELPER_ENV}."
     )
 }
 

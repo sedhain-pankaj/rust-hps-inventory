@@ -20,11 +20,11 @@ The app stores its development/runtime SQLite database at `hps.db` in this folde
 
 ## Fingerprint Helper
 
-The URU4500 helper source is bundled in `libfprint-CS9711/` (vendored libfprint tree). Build it with:
+The URU4500 helper source is bundled in `libfprint-uru4500/` (vendored libfprint tree). Build it with:
 
 ```bash
-meson setup libfprint-CS9711/build libfprint-CS9711 -Ddrivers=uru4000 -Ddoc=false -Dgtk-examples=false -Dintrospection=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled
-ninja -C libfprint-CS9711/build examples/employee-clock-helper
+meson setup libfprint-uru4500/build libfprint-uru4500 -Ddrivers=uru4000 -Ddoc=false -Dgtk-examples=false -Dintrospection=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled
+ninja -C libfprint-uru4500/build examples/employee-clock-helper
 ```
 
 The Rust app embeds the built helper and libfprint artifact when they exist at the expected build paths.

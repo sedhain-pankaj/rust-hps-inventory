@@ -10,7 +10,7 @@ Hopkins Plaster Studio kiosk + inventory system has two codebases:
 | Python legacy (reference) | `Hopkins-Inventory-Management/` | Historical reference for behavior and helper flow |
 
 The fingerprint stack is shared via the C helper binary:
-`libfprint-CS9711/build/examples/employee-clock-helper`.
+`libfprint-uru4500/build/examples/employee-clock-helper`.
 
 ---
 
@@ -185,7 +185,7 @@ Implemented in `fingerprint.rs`:
 - Resolves helper from:
   1. `HPS_FINGERPRINT_HELPER`
   2. extracted bundle in app data dir
-  3. build paths under `libfprint-CS9711/...`
+  3. build paths under `libfprint-uru4500/...`
 - Sets `LD_LIBRARY_PATH` so helper finds bundled `libfprint-2.so.2`
 - Runs helper with `current_dir = source_root` (Python-style `BASE_DIR` equivalent)
 - Applies timeout via `HPS_FINGERPRINT_TIMEOUT` (default 360s)
@@ -267,17 +267,17 @@ node --test ui/js/test/pure.test.mjs
 Direct helper smoke test:
 ```bash
 # Enroll (single template)
-LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
-  libfprint-CS9711/build/examples/employee-clock-helper enroll /tmp/fp-test EMP001 right-index
+LD_LIBRARY_PATH=libfprint-uru4500/build/libfprint \
+  libfprint-uru4500/build/examples/employee-clock-helper enroll /tmp/fp-test EMP001 right-index
 
 # Identify
-LD_LIBRARY_PATH=libfprint-CS9711/build/libfprint \
-  libfprint-CS9711/build/examples/employee-clock-helper identify /tmp/fp-test
+LD_LIBRARY_PATH=libfprint-uru4500/build/libfprint \
+  libfprint-uru4500/build/examples/employee-clock-helper identify /tmp/fp-test
 ```
 
 Rebuild helper after C changes:
 ```bash
-cd libfprint-CS9711/build
+cd libfprint-uru4500/build
 ninja -j$(nproc)
 ```
 
@@ -297,18 +297,18 @@ This project has **two separate knowledge graphs**, each with god nodes, communi
 | Graph | Location | Covers |
 |---|---|---|
 | app | `graphify-out/` (repo root) | The app: Rust/Tauri backend + UI + docs |
-| cs9711 | `libfprint-CS9711/graphify-out/` | The vendored C library: core, all drivers, SIGFM matcher, examples (incl. `employee-clock-helper.c`) |
+| uru4500 | `libfprint-uru4500/graphify-out/` | The vendored C library: core, all drivers, SIGFM matcher, examples (incl. `employee-clock-helper.c`) |
 
 When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
 
 Rules:
 - For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- Questions about the fingerprint driver internals (uru4000.c, sigfm.cpp, FpiSsm, USB transfer, other drivers) go to the cs9711 graph: `graphify query "<question>" --graph libfprint-CS9711/graphify-out/graph.json` (works from the repo root).
+- Questions about the fingerprint driver internals (uru4000.c, sigfm.cpp, FpiSsm, USB transfer, other drivers) go to the uru4500 graph: `graphify query "<question>" --graph libfprint-uru4500/graphify-out/graph.json` (works from the repo root).
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- **Update each graph from its own scan root — never update the cs9711 graph from the repo root:**
+- **Update each graph from its own scan root — never update the uru4500 graph from the repo root:**
   - App graph: `graphify update .` from the repo root (AST-only, no API cost).
-  - CS9711 graph: `cd libfprint-CS9711 && graphify update .` (or `/graphify .` with working directory `libfprint-CS9711/`). The root `.graphifyignore` excludes `libfprint-CS9711/`, so a root scan can never see or refresh it.
-- The root `.graphifyignore` excludes the vendored `libfprint-CS9711/` C library from the app graph. Do not remove that exclusion — the driver has its own graph instead.
-- The nested `libfprint-CS9711/.graphifyignore` contains `!libfprint/` and `!examples/` negations on purpose: graphify loads ancestor `.graphifyignore` files up to the nearest VCS root, so without them the root's `libfprint-CS9711/` rule collapses a nested scan to root-level files only. Keep the negations above the exclusion lines (last-match-wins).
+  - URU4500 graph: `cd libfprint-uru4500 && graphify update .` (or `/graphify .` with working directory `libfprint-uru4500/`). The root `.graphifyignore` excludes `libfprint-uru4500/`, so a root scan can never see or refresh it.
+- The root `.graphifyignore` excludes the vendored `libfprint-uru4500/` C library from the app graph. Do not remove that exclusion — the driver has its own graph instead.
+- The nested `libfprint-uru4500/.graphifyignore` contains `!libfprint/` and `!examples/` negations on purpose: graphify loads ancestor `.graphifyignore` files up to the nearest VCS root, so without them the root's `libfprint-uru4500/` rule collapses a nested scan to root-level files only. Keep the negations above the exclusion lines (last-match-wins).

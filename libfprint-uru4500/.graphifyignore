@@ -1,11 +1,11 @@
-# Re-include the dirs the parent repo's .graphifyignore excludes (libfprint-CS9711/).
+# Re-include the dirs the parent repo's .graphifyignore excludes (libfprint-uru4500/).
 # graphify loads ancestor ignore files up to the nearest VCS root, so without
 # these negations a scan rooted here collapses to root-level files only.
 # Negations must come BEFORE the exclusions below (last-match-wins).
 !libfprint/
 !examples/
 
-# Upstream boilerplate not relevant to the CS9711 port
+# Upstream boilerplate not relevant to the URU4500 port
 build/
 tests/
 doc/
