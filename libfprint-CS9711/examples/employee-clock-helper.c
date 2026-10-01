@@ -17,8 +17,9 @@
 
 #include "fpi-print.h"
 
-/* Alignment hint tuning (see fp-align-tool.c for the derivation). */
-#define PX_PER_MM 19.0
+/* Alignment hint tuning (see fp-align-tool.c for the derivation).
+ * PX_PER_MM assumes a 500 dpi reader (U.arec 4500: 500 / 25.4). */
+#define PX_PER_MM 19.7
 #define SEARCH_RANGE 33
 #define MIN_OVERLAP_FRAC 0.40
 #define FPIMG_MAGIC "FPIM"
@@ -313,7 +314,7 @@ report_no_match_hint (GPtrArray *records,
   for (guint i = 0; i < records->len; i++)
     {
       PrintRecord *record = g_ptr_array_index (records, i);
-      int score = fpi_print_sigfm_best_score (record->print, scanned_print, NULL);
+      int score = fpi_print_bz3_best_score (record->print, scanned_print, NULL);
       if (score > best_score)
         {
           best_score = score;
@@ -403,7 +404,7 @@ find_device (FpContext *context)
       if (!fallback)
         fallback = device;
 
-      if (g_strcmp0 (fp_device_get_driver (device), "cs9711") == 0)
+      if (g_strcmp0 (fp_device_get_driver (device), "uru4000") == 0)
         return device;
     }
 

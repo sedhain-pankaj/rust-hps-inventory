@@ -152,9 +152,7 @@ driver_sources = {
     'realtek' :
         [ 'drivers/realtek/realtek.c' ],
     'focaltech_moc' :
-        [ 'drivers/focaltech_moc/focaltech_moc.c' ],
-    'cs9711' :
-        [ 'drivers/cs9711/cs9711.c' ],
+        [ 'drivers/focaltech_moc/focaltech_moc.c', 'drivers/focaltech_moc/focaltech_moc_proto.c' ],
 }
 
 helper_sources = {

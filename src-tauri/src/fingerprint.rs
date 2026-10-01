@@ -114,7 +114,7 @@ pub async fn identify_employee(
     let storage = paths.fingerprint_dir.clone();
 
     // Cap at 1 outer spawn — the helper already retries 3 times internally.
-    // Multiple spawns cause repeated open/close cycles that leave the CS9711
+    // Multiple spawns cause repeated open/close cycles that leave the reader's
     // USB device locked ("Resource busy [-6]"). The helper handles retry/NO_MATCH
     // itself; re-spawning just poisons the device for subsequent enroll.
     let attempts = 1;
@@ -210,7 +210,7 @@ pub async fn enroll_employee(
         finger.to_string(),
     ];
     // Run enroll with one retry for "resource busy" — after a failed identify,
-    // the CS9711 USB driver may still be releasing the interface.
+    // the reader's USB driver may still be releasing the interface.
     let helper_1 = helper.clone();
     let source_1 = paths.source_root.clone();
     let args_1 = args.clone();

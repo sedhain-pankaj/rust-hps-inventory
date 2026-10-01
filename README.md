@@ -20,10 +20,10 @@ The app stores its development/runtime SQLite database at `hps.db` in this folde
 
 ## Fingerprint Helper
 
-The WA28/CS9711 helper source is bundled in `libfprint-CS9711/`. Build it with:
+The URU4500 helper source is bundled in `libfprint-CS9711/` (vendored libfprint tree). Build it with:
 
 ```bash
-meson setup libfprint-CS9711/build libfprint-CS9711 -Ddrivers=cs9711 -Ddoc=false -Dgtk-examples=false -Dintrospection=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled
+meson setup libfprint-CS9711/build libfprint-CS9711 -Ddrivers=uru4000 -Ddoc=false -Dgtk-examples=false -Dintrospection=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled
 ninja -C libfprint-CS9711/build examples/employee-clock-helper
 ```
 
@@ -31,11 +31,11 @@ The Rust app embeds the built helper and libfprint artifact when they exist at t
 
 ### Alignment hints
 
-Enrollment stores the 15 sub-print images as an `<employee_id>.fpimg` bundle alongside the
+Enrollment stores the 5 sub-print images as an `<employee_id>.fpimg` bundle alongside the
 `.fpdata` template (both persisted to the `images`/`template` columns of `fingerprint_templates`).
 When an identify scan fails, the helper emits:
 
-- `BEST|<employee_id>|<score>` — closest employee and max SIFT score (threshold is 40)
+- `BEST|<employee_id>|<score>` — closest employee and max Bozorth3 score (match threshold is 40)
 - `HINT|<employee_id>|<ncc_pct>|<slide_x_mm>|<slide_y_mm>` — NCC alignment of the scanned finger
   against the enrolled sub-prints; signed slide in mm (+x right, +y down)
 

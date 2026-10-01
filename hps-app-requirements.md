@@ -1,7 +1,7 @@
 # HPS Kiosk App — Requirements Spec
 
 ## 1. Overview
-A full-screen, unskippable kiosk app (Rust + Tauri + SQLx, single SQLite database `hps.db`) for staff clock-in/out, cornice production logging, payroll calculation, and inventory tracking. Fingerprint auth (WA28 scanner, CS9711 chipset — already implemented) is the primary login method, with a password fallback after repeated failures.
+A full-screen, unskippable kiosk app (Rust + Tauri + SQLx, single SQLite database `hps.db`) for staff clock-in/out, cornice production logging, payroll calculation, and inventory tracking. Fingerprint auth (DigitalPersona URU4500 scanner — already implemented) is the primary login method, with a password fallback after repeated failures.
 
 **Out of scope for now:** Brochure section (build last).
 
@@ -125,7 +125,7 @@ Tauri handles the full-screen webview, but true "unskippable kiosk" behavior (bl
 
 ---
 
-*Fingerprint hardware integration (WA28/CS9711) already completed — no longer an open risk.*
+*Fingerprint hardware integration (DigitalPersona URU4500) already completed — no longer an open risk.*
 
 ---
 

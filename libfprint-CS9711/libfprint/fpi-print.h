@@ -59,6 +59,13 @@ FpiMatchResult fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
 int fpi_print_sigfm_best_score (FpPrint *template, FpPrint *print,
                                 gint *best_index);
 
+/* Returns the highest bozorth3 match score of the scanned @print against all
+ * sub-prints of @template (no threshold applied).  If @best_index is not
+ * NULL, the index of the best-matching sub-print is stored there.  Returns
+ * -1 if the prints are not of type #FPI_PRINT_NBIS. */
+int fpi_print_bz3_best_score (FpPrint *template, FpPrint *print,
+                              gint *best_index);
+
 /* Helpers to encode metadata into user ID strings. */
 gchar * fpi_print_generate_user_id (FpPrint * print);
 gboolean fpi_print_fill_from_user_id (FpPrint    *print,

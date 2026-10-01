@@ -43,7 +43,7 @@ The fingerprint stack is shared via the C helper binary:
 ### Persistence
 - SQLite DB: `hps.db` (repo root)
 - Fingerprint temp/cache files: `data/fingerprints/`
-  - Enrollment writes `<employee_id>.fpdata` (single template) and `<employee_id>.fpimg` (bundle of the 15 sub-print images), persists both to SQLite, removes temp files.
+  - Enrollment writes `<employee_id>.fpdata` (single template) and `<employee_id>.fpimg` (bundle of the 5 sub-print images), persists both to SQLite, removes temp files.
   - Identify exports templates (and image bundles) from SQLite to `data/fingerprints/`, then clears cache after scan.
 - `fingerprint_templates` table: one row per `employee_id` (single template). Columns: `employee_id` (PK), `finger` (the enrolled finger), `template` (BLOB), `images` (BLOB, optional `.fpimg` bundle used for alignment hints), `updated_at`.
 - Database backups: `data/backup/weekly/` and `data/backup/monthly/` (see Database Backup & Restore).
@@ -96,8 +96,10 @@ slated for removal in the final release.
 
 ## Fingerprint Device Context
 
-- Hardware: WA28 reader (CS9711 chipset)
-- Typical USB IDs: `2541:0236` / `2541:9711`
+- Hardware: DigitalPersona U.arec 4500 (URU4500) optical reader, 500 dpi
+- USB ID: `05ba:000a` (libfprint driver: `uru4000`)
+- USB access: `/etc/udev/rules.d/90-uru4500.rules` grants `plugdev` group access
+  (`MODE="0660"`); the kiosk user must be in `plugdev`
 - Helper protocol lines:
   - `DEVICE|...`
   - `ENROLL_STAGES|N`
@@ -109,37 +111,45 @@ slated for removal in the final release.
   - `MATCH|...`
   - `NO_MATCH`
   - `ATTEMPT|N|3|waiting` (identify: which scan attempt is in progress)
-  - `BEST|<employee_id>|<score>` (identify: closest employee + max SIFT score, emitted before `NO_MATCH`)
+  - `BEST|<employee_id>|<score>` (identify: closest employee + max Bozorth3 score, emitted before `NO_MATCH`)
   - `HINT|<employee_id>|<ncc_pct>|<slide_x_mm>|<slide_y_mm>` (identify: NCC alignment of the scanned finger vs the enrolled sub-print images; signed slide, +x right / +y down; only when the employee has a `.fpimg` bundle)
 
 Only these protocol lines are consumed by Rust from helper output.
 
 ---
 
-## Fingerprint Matching Algorithm (SIGFM)
+## Fingerprint Matching Algorithm (NBIS / Bozorth3)
 
-The CS9711 driver uses the **SIGFM** algorithm (`libfprint/sigfm/sigfm.cpp`) — a SIFT-based
-minutiae matcher. Understanding its parameters is essential for tuning accuracy.
+The `uru4000` driver is a libfprint **image device** using the default **NBIS**
+algorithm: it captures raw 384×290 images, minutiae are extracted (NBIS), and
+matching runs in userspace with **Bozorth3 (BZ3)**. This is the standard libfprint
+path (most readers use it) — no custom matcher code.
 
 ### How matching works
-1. **Keypoint extraction**: SIFT detects keypoints + descriptors in the live scan image.
-2. **Ratio test**: A keypoint match is accepted only if `best_distance < distance_match × second_best_distance`.
-3. **Geometric consistency**: For all matched keypoint pairs, vector lengths must agree within `length_match` (5%) and angles within `angle_match` (5%).
-4. **Score**: Count of consistent angle pairs. Must be ≥ `score_threshold` to be a match.
+1. **Enroll**: 5 scans (image-device default `IMG_ENROLL_STAGES`); each scan yields
+   one NBIS minutiae set. The template stores all 5 sub-prints.
+2. **Identify**: one scan is captured, then the library loops the gallery and BZ3-matches
+   the scanned minutiae against every sub-print of every template
+   (`fpi-image-device.c`, `FPI_DEVICE_ACTION_IDENTIFY`). First success wins.
+3. **Score**: BZ3 score must be ≥ `score_threshold` (default **40**,
+   `BOZORTH3_DEFAULT_THRESHOLD` in `fp-image-device.c`) to count as a match.
 
 ### Tunable parameters (current values)
 
 | Parameter | File | Value | Effect |
 |---|---|---|---|
-| `score_threshold` | `cs9711.c` | **40** (default) | Min consistent angle pairs. No override in the driver — uses the SIGFM default. |
-| `distance_match` | `sigfm.cpp` | **0.75** | Ratio test threshold. Higher = accepts more borderline keypoints. |
-| `length_match` | `sigfm.cpp` | 0.05 | Geometric length tolerance. |
-| `angle_match` | `sigfm.cpp` | 0.05 | Geometric angle tolerance. |
-| `min_match` | `sigfm.cpp` | 5 | Min keypoints required before scoring. |
+| `score_threshold` | `fp-image-device.c` | **40** (default) | Min BZ3 score for a match. `uru4000.c` does not override it; set `img_class->score_threshold` there to tune. |
+| `PX_PER_MM` | `employee-clock-helper.c` | 19.7 | Pixels/mm for HINT slide math (500 dpi: 500/25.4). |
+| `SEARCH_RANGE` | `employee-clock-helper.c` | 33 | NCC search range (px) for HINT alignment. |
+| `MIN_OVERLAP_FRAC` | `employee-clock-helper.c` | 0.40 | Min overlap fraction for a valid NCC alignment. |
 
-The driver runs with the **default SIGFM parameters** (no custom `score_threshold`
-override in `cs9711.c`, `distance_match = 0.75`). Enrollment stores a **single template**
-per employee (`<employee_id>.fpdata`); there is no multi-template mode.
+The helper additionally uses `fpi_print_bz3_best_score()` (added to the vendored
+libfprint in `fpi-print.c`, mirrors `fpi_print_sigfm_best_score`) to drive the
+`BEST|` line — the raw BZ3 score with no threshold applied.
+
+Enrollment stores a **single template** per employee (`<employee_id>.fpdata`);
+there is no multi-template mode. Templates are driver-specific — a template
+enrolled on one reader model cannot be used on another.
 
 ---
 
@@ -293,7 +303,7 @@ When the user types `/graphify`, use the installed graphify skill or instruction
 
 Rules:
 - For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- Questions about the fingerprint driver internals (cs9711.c, sigfm.cpp, FpiSsm, USB transfer, other drivers) go to the cs9711 graph: `graphify query "<question>" --graph libfprint-CS9711/graphify-out/graph.json` (works from the repo root).
+- Questions about the fingerprint driver internals (uru4000.c, sigfm.cpp, FpiSsm, USB transfer, other drivers) go to the cs9711 graph: `graphify query "<question>" --graph libfprint-CS9711/graphify-out/graph.json` (works from the repo root).
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
